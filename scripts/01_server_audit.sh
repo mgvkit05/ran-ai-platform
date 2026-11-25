@@ -101,38 +101,48 @@ check rpm -q docker-ce containerd.io glibc python39 python3
 section 'Current CPU and I/O sample (three one-second samples)'
 check vmstat 1 3
 
-section 'All visible process/thread affinities, anonymized'
-# Read all visible threads, including idle pinned threads. Do not assume old PIDs
-# are valid. An alias groups threads without exposing executable names or PIDs.
-# A broad affinity is permission to run on CPUs, not proof those CPUs are idle.
-check python3 -c '
-import collections, glob
-groups = 0
-denied = 0
-gone = 0
-for process in sorted(glob.glob("/proc/[0-9]*")):
-    masks = collections.Counter()
-    for thread in glob.glob(process + "/task/[0-9]*/status"):
-        try:
-            fields = {}
-            with open(thread) as stream:
-                for line in stream:
-                    key, sep, value = line.partition(":")
-                    if key in ("Cpus_allowed_list", "Mems_allowed_list"):
-                        fields[key] = value.strip()
-            masks[(fields.get("Cpus_allowed_list", "?"), fields.get("Mems_allowed_list", "?"))] += 1
-        except PermissionError:
-            denied += 1
-        except (FileNotFoundError, ProcessLookupError):
-            gone += 1
-    if masks:
-        groups += 1
-        for (cpus, nodes), count in sorted(masks.items()):
-            print("process-%04d threads=%d allowed_cpus=%s allowed_nodes=%s" % (groups, count, cpus, nodes))
-print("Permission-denied thread reads:", denied)
-print("Threads gone during snapshot:", gone)
-print("Aliases apply only to this report. No CPU allocation is approved by this snapshot.")
-'
+printf '=== CPU affinity follow-up ===\n'
+for item in online isolated nohz_full; do
+  printf '%s: ' "$item"
+  cat "/sys/devices/system/cpu/$item" 2>/dev/null || printf 'unavailable\n'
+done
+printf '\n=== Thread masks grouped by anonymous process ===\n'
+process_count=0
+skipped=0
+thread_count=0
+for process in /proc/[0-9]*; do
+  [ -d "$process/task" ] || continue
+  process_count=$((process_count + 1))
+  declare -A masks=()
+  for status in "$process"/task/[0-9]*/status; do
+    cpus=''
+    nodes=''
+    if [ ! -r "$status" ]; then
+      skipped=$((skipped + 1))
+      continue
+    fi
+    while IFS=: read -r key value; do
+      case "$key" in
+        Cpus_allowed_list) cpus=${value//[[:space:]]/} ;;
+        Mems_allowed_list) nodes=${value//[[:space:]]/} ;;
+      esac
+    done < "$status" 2>/dev/null
+    if [ -z "$cpus" ] || [ -z "$nodes" ]; then
+      skipped=$((skipped + 1))
+      continue
+    fi
+    mask="$cpus|$nodes"
+    masks["$mask"]=$(( ${masks["$mask"]:-0} + 1 ))
+    thread_count=$((thread_count + 1))
+  done
+  for mask in "${!masks[@]}"; do
+    printf 'process-%04d threads=%d cpus=%s nodes=%s\n' "$process_count" "${masks[$mask]}" "${mask%|*}" "${mask#*|}"
+  done
+  unset masks
+done
+printf '\nThreads read: %d; unreadable or vanished: %d\n' "$thread_count" "$skipped"
+printf 'Aliases apply only to this run. Allowed CPUs are not necessarily idle.\n'
+printf 'No CPU allocation has been selected; review alongside sibling topology and utilization.\n'
 
 section 'Completion'
 printf 'No packages installed, services changed, or workloads started.\n'
