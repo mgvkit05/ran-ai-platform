@@ -18,3 +18,7 @@ software/
 cpu-affinity.txt
 ran-ai-audit-*.txt
 ai-server-readiness.txt
+ran-ai-offline-bundle/
+*.gguf
+*.safetensors
+*.part
