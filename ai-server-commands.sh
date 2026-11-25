@@ -34,6 +34,9 @@ check df -h .
 section 'NVIDIA GPU and driver'
 check nvidia-smi
 
+section 'PCI hardware (look for NVIDIA, AMD, VGA, 3D, or Display devices)'
+check lspci -nn
+
 section 'CUDA compiler (optional; not required by all GPU runtimes)'
 check nvcc --version
 
@@ -43,20 +46,9 @@ check python3 -m pip --version
 
 section 'Installed PyTorch and GPU access'
 if command -v python3 >/dev/null 2>&1; then
-  python3 - <<'PY'
-import importlib.util
-
-if importlib.util.find_spec('torch') is None:
-    print('PyTorch is not installed in the current Python environment.')
-else:
-    import torch
-    print('PyTorch:', torch.__version__)
-    print('PyTorch CUDA runtime:', torch.version.cuda)
-    print('CUDA available:', torch.cuda.is_available())
-    print('GPU count:', torch.cuda.device_count())
-    for index in range(torch.cuda.device_count()):
-        print('GPU', index, ':', torch.cuda.get_device_name(index))
-PY
+  check python3 -m pip show torch
+  python3 -c 'import importlib.util; import sys; sys.exit(0 if importlib.util.find_spec("torch") else 1)' &&
+    check python3 -c 'import torch; print("PyTorch:", torch.__version__); print("PyTorch CUDA runtime:", torch.version.cuda); print("CUDA available:", torch.cuda.is_available()); print("GPU count:", torch.cuda.device_count()); print("GPU names:", [torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())])'
 fi
 
 section 'Git'
