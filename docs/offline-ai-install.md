@@ -31,6 +31,20 @@ If a release layout or registry response changes, stop and share the error.
 Do not bypass a checksum error. The bundle metadata is not a digital signature;
 keep it with its trusted download source.
 
+If Windows curl reports `CRYPT_E_NO_REVOCATION_CHECK` (0x80092012), retry with:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\04_download_ai_bundle.ps1 -AllowOfflineRevocationCheck
+```
+
+This opts into curl's `--ssl-revoke-best-effort` for these downloads only. Missing
+or offline revocation-list endpoints no longer block the transfer; certificate
+chain, hostname and file checksum verification remain enabled. Known revoked
+certificates are still rejected. It does not change Windows certificate settings.
+Normal mode keeps strict revocation checks. If corporate policy requires live
+revocation checks, ask IT to restore access instead. Existing verified downloads
+are reused and `.part` downloads resume. See the [curl option reference](https://curl.se/docs/manpage.html#--ssl-revoke-best-effort).
+
 ## 2. Transfer the entire folder
 
 Use your existing office-to-lab transfer method. Keep every file and subfolder.

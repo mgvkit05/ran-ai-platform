@@ -1,12 +1,26 @@
 # Run on the INTERNET-CONNECTED WINDOWS OFFICE LAPTOP, not the lab server.
 # Save 05_install_ai_offline.py beside this script first.
 # powershell -NoProfile -ExecutionPolicy Bypass -File .\04_download_ai_bundle.ps1
-param([string]$OutputDirectory = (Join-Path $HOME 'Downloads\ran-ai-offline-bundle'))
+param(
+    [string]$OutputDirectory = (Join-Path $HOME 'Downloads\ran-ai-offline-bundle'),
+    [switch]$AllowOfflineRevocationCheck
+)
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $installer = Join-Path $PSScriptRoot '05_install_ai_offline.py'
 if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) { throw 'Save 05_install_ai_offline.py beside this script first.' }
 if (-not (Get-Command curl.exe -ErrorAction SilentlyContinue)) { throw 'Windows curl.exe is required.' }
+$curlTlsOptions = @()
+if ($AllowOfflineRevocationCheck) {
+    $curlHelp = & curl.exe --help all
+    if (-not ($curlHelp -match '--ssl-revoke-best-effort')) {
+        throw 'This curl does not support --ssl-revoke-best-effort. Use an updated Windows curl or ask IT to restore certificate revocation access.'
+    }
+    # Still validates the TLS chain and hostname and rejects known revoked certificates.
+    # Allows missing/offline revocation-list distribution points for these transfers only.
+    $curlTlsOptions = @('--ssl-revoke-best-effort')
+    Write-Warning 'Using best-effort revocation checks for curl downloads; unavailable revocation services will not block a transfer. TLS certificate and SHA256 verification remain enabled.'
+}
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 $bundle = (Resolve-Path -LiteralPath $OutputDirectory).Path
 $records = [System.Collections.Generic.List[object]]::new()
@@ -28,8 +42,8 @@ function Download-Verified([string]$Url, [string]$Relative, [string]$Hash) {
     } else {
         Write-Host "Downloading: $Relative"
         $partial = "$destination.part"
-        & curl.exe --fail --location --retry 4 --continue-at - --output $partial $Url
-        if ($LASTEXITCODE -ne 0) { throw 'Download interrupted. Rerun the script to resume.' }
+        & curl.exe @curlTlsOptions --fail --location --retry 4 --continue-at - --output $partial $Url
+        if ($LASTEXITCODE -ne 0) { throw 'Download interrupted. For CRYPT_E_NO_REVOCATION_CHECK, rerun with -AllowOfflineRevocationCheck. Other errors need diagnosis. Existing partial files are retained.' }
         if ((Get-FileHash -LiteralPath $partial -Algorithm SHA256).Hash -ne $Hash) { throw "Downloaded checksum mismatch: $Relative" }
         Move-Item -LiteralPath $partial -Destination $destination -Force
     }
@@ -59,7 +73,7 @@ $manifestPath = Join-Path $bundle $manifestRelative
 if (-not (Test-Path -LiteralPath $manifestPath)) {
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $manifestPath) | Out-Null
     $manifestPartial = "$manifestPath.part"
-    & curl.exe --fail --location --retry 4 --output $manifestPartial 'https://registry.ollama.ai/v2/library/gpt-oss/manifests/20b'
+    & curl.exe @curlTlsOptions --fail --location --retry 4 --output $manifestPartial 'https://registry.ollama.ai/v2/library/gpt-oss/manifests/20b'
     if ($LASTEXITCODE -ne 0) { throw 'Model manifest download failed.' }
     Get-Content -LiteralPath $manifestPartial -Raw | ConvertFrom-Json | Out-Null
     Move-Item -LiteralPath $manifestPartial -Destination $manifestPath
