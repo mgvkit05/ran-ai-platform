@@ -1,9 +1,25 @@
 # RAN AI Platform
 
 Self-hosted 5G KPI analytics with local AI inference. The current deployment
-priority is validating GPT-OSS 20B inference on the offline AI server.
+priority is running persistent local GPT-OSS 20B inference on the offline AI server.
 
-## Next command: first inference test
+## Current step: persistent local Ollama
+
+The first GPT-OSS 20B inference test succeeded using 32 threads at 14.32 tokens/s.
+Transfer `scripts/07_manage_ollama.py` to the AI server, then run from its directory:
+
+```bash
+"$HOME/ran-ai/venv/bin/python" 07_manage_ollama.py start
+"$HOME/ran-ai/venv/bin/python" 07_manage_ollama.py status
+"$HOME/ran-ai/venv/bin/python" 07_manage_ollama.py ask
+```
+
+Ollama stays running locally and the model stays loaded between questions. No
+sudo or internet is required. Run the same script with `stop` to release it.
+This is a background process, not a boot service; run `start` again after reboot.
+See [persistent instance instructions](docs/persistent-ollama.md).
+
+## Completed step: first inference test
 
 Ollama 0.40.18 and GPT-OSS 20B installation succeeded on November 26, 2026.
 The user confirmed that the server is dedicated to AI and all CPUs may be used.
@@ -22,7 +38,7 @@ The script uses the available physical-core count for inference threads (expecte
 and speed, and stops its temporary Ollama server. Share the final output.
 See the [inference test instructions](docs/offline-ai-install.md#4-first-inference-test-on-the-dedicated-ai-server).
 
-## Next command: AI server installation
+## Completed step: AI server installation
 
 After the entire `ran-ai-offline-bundle` folder has finished transferring to
 `$HOME/ran-ai/software/ran-ai-offline-bundle`, run on the **Linux AI server**,
