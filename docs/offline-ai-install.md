@@ -69,6 +69,10 @@ Do not put the bundle under `/tmp`, `/usr` or the root filesystem. Leave at leas
 
 ## 3. AI server: install offline, without sudo
 
+After the entire bundle has finished uploading, run this command on the AI
+server as your normal account. It installs **both Ollama and GPT-OSS 20B** from
+the transferred bundle; no additional model download is needed:
+
 ```bash
 "$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/software/ran-ai-offline-bundle/05_install_ai_offline.py"
 ```
