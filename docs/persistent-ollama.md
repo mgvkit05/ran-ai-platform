@@ -39,6 +39,12 @@ No sudo, firewall changes or modifications to existing services are required.
 `ask` prompts for a question, prints the final answer and generation speed, and
 keeps the model loaded. It does not save chat history or implement multi-turn
 conversation memory. Interactive entry avoids putting questions in shell history.
+The interactive prompt enables Python's readline editor and binds both common
+SSH Backspace codes (Ctrl-H and DEL) to delete the preceding character. Arrow
+keys can move through the line. Replace the manager script to get this fix;
+the running Ollama process does not need restarting. If the server's Python lacks
+the readline extension, the script reports that explicitly; an inline question
+can still be used without changing the running server.
 An explicit question is also supported:
 
 ```bash

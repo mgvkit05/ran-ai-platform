@@ -20,6 +20,25 @@ HOST = '127.0.0.1:11435'
 MODEL = 'gpt-oss:20b'
 
 
+def read_question():
+    # Importing readline enables Python input() line editing. SSH clients may
+    # send either ASCII Backspace (Ctrl-H) or Delete (DEL) for the same key.
+    try:
+        import readline
+    except ImportError:
+        raise RuntimeError('Python readline is unavailable. Use ask "your question" until terminal line editing is available.') from None
+    if 'libedit' in (readline.__doc__ or ''):
+        readline.parse_and_bind('bind "^H" ed-delete-prev-char')
+        readline.parse_and_bind('bind "^?" ed-delete-prev-char')
+    else:
+        readline.parse_and_bind('"\\C-h": backward-delete-char')
+        readline.parse_and_bind('"\\C-?": backward-delete-char')
+    # Questions should not be added to readline history.
+    if hasattr(readline, 'set_auto_history'):
+        readline.set_auto_history(False)
+    return input('Question: ')
+
+
 def identity(pid, proc=Path('/proc')):
     """Identify the Linux process lifetime, not just a reusable PID."""
     try:
@@ -229,7 +248,7 @@ def main():
                 return status(state)
             if not state or not owned(state):
                 raise RuntimeError('managed Ollama is not running; run start first')
-            prompt = args.prompt if args.prompt is not None else input('Question: ')
+            prompt = args.prompt if args.prompt is not None else read_question()
             if not prompt.strip():
                 raise ValueError('question is empty')
             began = time.monotonic()
