@@ -34,7 +34,8 @@ Transfer the entire `ran-ai-clickhouse-bundle` folder to:
 $HOME/ran-ai/software/ran-ai-clickhouse-bundle
 ```
 
-Then run without sudo:
+The user confirmed the bundle has been uploaded. The next command is the
+following, run on the **Linux AI server**, without sudo:
 
 ```bash
 "$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/software/ran-ai-clickhouse-bundle/09_install_clickhouse_offline.py"

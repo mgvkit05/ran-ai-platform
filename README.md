@@ -5,6 +5,18 @@ priority is running persistent local GPT-OSS 20B inference on the offline AI ser
 
 ## Next step: install ClickHouse offline
 
+The ClickHouse bundle has been uploaded to the AI server. Run this command
+on the **Linux AI server**, without sudo:
+
+```bash
+"$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/software/ran-ai-clickhouse-bundle/09_install_clickhouse_offline.py"
+```
+
+Share the final version and SUCCESS or FAILED output. This verifies and installs
+the executable without starting the database or interrupting Ollama.
+
+### Download and transfer reference
+
 The user confirmed that persistent Ollama and interactive Backspace editing work.
 Install the analytical database next using the [offline ClickHouse instructions](docs/offline-clickhouse-install.md).
 Download `scripts/08_download_clickhouse_bundle.ps1` and
@@ -17,7 +29,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\08_download_clickhouse_bun
 Transfer the complete generated bundle and run the installation command in the
 guide. This phase installs the executable without starting a database server.
 
-## Current step: persistent local Ollama
+## Completed step: persistent local Ollama
 
 The first GPT-OSS 20B inference test succeeded using 32 threads at 14.32 tokens/s.
 Transfer `scripts/07_manage_ollama.py` to the AI server, then run from its directory:
