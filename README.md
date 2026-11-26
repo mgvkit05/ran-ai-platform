@@ -1,9 +1,25 @@
 # RAN AI Platform
 
 Self-hosted 5G KPI analytics with local AI inference. The current deployment
-priority is starting the local analytical database alongside GPT-OSS 20B.
+priority is profiling the source TAR/CSV layout before database ingestion.
 
-## Current command: start and verify ClickHouse
+## Current command: profile the TAR sample
+
+ClickHouse startup and synthetic insert/query verification succeeded. The user
+uploaded a TAR collection, correcting the earlier ZIP assumption. Transfer
+`scripts/11_profile_archive.py` to `$HOME/ran-ai/app/11_profile_archive.py` on the AI
+server, then run from any directory:
+
+```bash
+"$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/11_profile_archive.py"
+```
+
+The newest archive in `$HOME/ran-ai/data/landing` is sampled without extraction.
+Share the terminal summary, which omits filenames, headers and row values.
+Keep the separate private header-mapping report on the lab server. See
+[archive profiling instructions](docs/archive-profiling.md).
+
+## Completed step: start and verify ClickHouse
 
 ClickHouse 26.9.40.9 installation succeeded. Transfer `scripts/10_manage_clickhouse.py`
 to the AI server, then run from its directory, without sudo:

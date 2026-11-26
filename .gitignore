@@ -25,3 +25,4 @@ ran-ai-offline-bundle/
 run/
 ran-ai-clickhouse-bundle/
 config/clickhouse-server/
+reports/
