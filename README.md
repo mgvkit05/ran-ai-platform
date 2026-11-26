@@ -1,7 +1,26 @@
 # RAN AI Platform
 
 Self-hosted 5G KPI analytics with local AI inference. The current deployment
-priority is installing Ollama and GPT-OSS 20B on the offline AI server.
+priority is validating GPT-OSS 20B inference on the offline AI server.
+
+## Next command: first inference test
+
+Ollama 0.40.18 and GPT-OSS 20B installation succeeded on November 26, 2026.
+The user confirmed that the server is dedicated to AI and all CPUs may be used.
+Earlier workload-sharing restrictions no longer constrain CPU selection for this
+test. Existing kernel isolation, HugePages and system configuration remain unchanged.
+
+Transfer `scripts/06_test_ai_inference.py` to the AI server and, from its directory,
+run without sudo:
+
+```bash
+"$HOME/ran-ai/venv/bin/python" 06_test_ai_inference.py
+```
+
+The script uses the available physical-core count for inference threads (expected
+56 on this server), makes one local CPU inference request, prints the response
+and speed, and stops its temporary Ollama server. Share the final output.
+See the [inference test instructions](docs/offline-ai-install.md#4-first-inference-test-on-the-dedicated-ai-server).
 
 ## Next command: AI server installation
 

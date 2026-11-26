@@ -89,11 +89,42 @@ Linux 8.10 / glibc 2.28. A message saying no Ollama server is running can be nor
 during this check. The CPU backend and actual model compatibility still require
 the next inference test; the script does not claim to have verified them.
 
-Share the version check and SUCCESS or FAILED output. Do not start `ollama serve`
-or `ollama run` yet. The next step is a local-only server and short inference test,
-with an explicit CPU mask, thread count, memory limit and single-request execution.
-Existing isolated CPUs, their physical-core siblings, and lab workloads must be
-accounted for when choosing that mask. High aggregate idle time is insufficient.
+Installation succeeded with Ollama 0.40.18 on November 26, 2026. Proceed with the
+following controlled inference test rather than an unrestricted background service.
+
+## 4. First inference test on the dedicated AI server
+
+The user confirmed on November 26, 2026 that the server is dedicated to AI and
+all CPUs may be used regardless of earlier lab workloads. This supersedes the
+earlier requirement to identify unused cores before inference. Do not alter
+existing kernel isolation, HugePages, BIOS, or system services.
+
+Transfer `scripts/06_test_ai_inference.py` through the office laptop and run from
+its directory on the AI server:
+
+```bash
+"$HOME/ran-ai/venv/bin/python" 06_test_ai_inference.py
+```
+
+This uses the current allowed CPU set and defaults to one inference thread per
+available physical core (expected 56). It starts a temporary local-only Ollama
+server at `127.0.0.1:11435`, verifies that the model is listed locally and sends
+one synthetic question. No external endpoint is contacted by the test client;
+cloud features are disabled. A single request uses CPU inference, 2,048-token
+context, low reasoning effort and at most 256 generated tokens. A per-process
+128 GiB virtual-address-space limit is inherited by the model runner. This is
+not a RAM reservation or an aggregate cgroup memory limit. Model loading uses
+memory-mapped files and counts against the address-space ceiling.
+
+The request times out after 10 minutes. The script stops only its own new server
+process group on completion, error or Ctrl+C. An occupied port causes it to stop
+before starting anything. Logs are saved under project `logs/`; share the summary
+response, timings and speed. If startup fails, share the last lines of the printed
+server-log filename. No persistent service is installed.
+
+To compare thread counts later, rerun with `--threads 28`, for example. More
+threads do not necessarily improve token generation; use the first measured
+result before tuning or starting GPT-OSS 120B.
 
 ## References
 
