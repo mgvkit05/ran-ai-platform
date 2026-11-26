@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import re
 from pathlib import Path
 import tempfile
 import unittest
@@ -40,7 +41,12 @@ class ClickHouseManagerTests(unittest.TestCase):
         commands = []
         def execute(credentials, sql):
             commands.append(sql)
-            return json.dumps({'data': [{'rows': '2', 'successes': '193', 'attempts': '200', 'success_rate': 96.5}]}) if sql.startswith('SELECT') else ''
+            if sql.startswith('SELECT'):
+                # Reusing input names as aggregate aliases triggers ClickHouse
+                # ILLEGAL_AGGREGATION when another expression uses the input.
+                self.assertIsNone(re.search(r'sum\((\w+)\)\s+AS\s+\1\b', sql, re.IGNORECASE))
+                return json.dumps({'data': [{'rows': '2', 'total_successes': '193', 'total_attempts': '200', 'success_rate': 96.5}]})
+            return ''
         self.assertEqual(manager.smoke_test({}, execute)['success_rate'], 96.5)
         table = commands[1].split()[2]
         self.assertTrue(table.startswith('ran_ai.setup_test_'))

@@ -128,10 +128,12 @@ def smoke_test(credentials, execute=query):
         execute(credentials, 'CREATE TABLE %s (cell_id String, successes UInt64, attempts UInt64) ENGINE=MergeTree ORDER BY cell_id' % table)
         created = True
         execute(credentials, "INSERT INTO %s VALUES ('synthetic_A',98,100),('synthetic_B',95,100)" % table)
-        answer = execute(credentials, 'SELECT count() AS rows, sum(successes) AS successes, sum(attempts) AS attempts, round(100.0*sum(successes)/sum(attempts),2) AS success_rate FROM %s FORMAT JSON' % table)
+        # ClickHouse aliases can be substituted throughout the same SELECT.
+        # Distinct output names prevent sum(successes) becoming a nested sum.
+        answer = execute(credentials, 'SELECT count() AS rows, sum(successes) AS total_successes, sum(attempts) AS total_attempts, round(100.0*sum(successes)/sum(attempts),2) AS success_rate FROM %s FORMAT JSON' % table)
         result = json.loads(answer)['data'][0]
-        if not (int(result['rows']) == 2 and int(result['successes']) == 193
-                and int(result['attempts']) == 200 and float(result['success_rate']) == 96.5):
+        if not (int(result['rows']) == 2 and int(result['total_successes']) == 193
+                and int(result['total_attempts']) == 200 and float(result['success_rate']) == 96.5):
             raise RuntimeError('synthetic query result differs from expected values')
         return result
     finally:

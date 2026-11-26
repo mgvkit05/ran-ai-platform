@@ -31,6 +31,20 @@ The test can be repeated independently:
 Share the SUCCESS and status output. On failure, share the final error and the
 last lines of the server log path printed by the script. Do not share credentials.
 
+If a prior copy reported `ILLEGAL_AGGREGATION` during its synthetic test, replace
+`10_manage_clickhouse.py` with the latest version. The query now uses aggregate
+aliases distinct from input column names. From the existing bundle directory run:
+
+```bash
+cd "$HOME/ran-ai/software/ran-ai-clickhouse-bundle"
+"$HOME/ran-ai/venv/bin/python" 10_manage_clickhouse.py start
+"$HOME/ran-ai/venv/bin/python" 10_manage_clickhouse.py status
+```
+
+The previous failed startup attempts graceful shutdown; no reinstall or deletion
+of configuration/data is required. If an instance is still running, use `test`
+to repeat the corrected synthetic query.
+
 ## Configuration and limits
 
 - HTTP endpoint: `http://127.0.0.1:18123`; no native TCP listener configured.
