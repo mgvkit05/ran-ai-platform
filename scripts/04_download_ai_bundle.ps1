@@ -1,6 +1,8 @@
 # Run on the INTERNET-CONNECTED WINDOWS OFFICE LAPTOP, not the lab server.
 # Save 05_install_ai_offline.py beside this script first.
 # powershell -NoProfile -ExecutionPolicy Bypass -File .\04_download_ai_bundle.ps1
+# Working command on the office laptop (confirmed 2026-11-25):
+# powershell -NoProfile -ExecutionPolicy Bypass -File .\04_download_ai_bundle.ps1 -AllowOfflineRevocationCheck
 param(
     [string]$OutputDirectory = (Join-Path $HOME 'Downloads\ran-ai-offline-bundle'),
     [switch]$AllowOfflineRevocationCheck

@@ -11,10 +11,11 @@ Save both scripts in the SAME folder:
 - `scripts/04_download_ai_bundle.ps1`
 - `scripts/05_install_ai_offline.py`
 
-Open PowerShell in that folder and run:
+Open PowerShell in that folder. The working command on the office laptop,
+confirmed on November 25, 2026, is:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\04_download_ai_bundle.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\04_download_ai_bundle.ps1 -AllowOfflineRevocationCheck
 ```
 
 This downloads files only: it does not install Windows Ollama or run the model.
@@ -31,7 +32,9 @@ If a release layout or registry response changes, stop and share the error.
 Do not bypass a checksum error. The bundle metadata is not a digital signature;
 keep it with its trusted download source.
 
-If Windows curl reports `CRYPT_E_NO_REVOCATION_CHECK` (0x80092012), retry with:
+The office laptop previously reported `CRYPT_E_NO_REVOCATION_CHECK` (0x80092012).
+Adding `-AllowOfflineRevocationCheck` resolved the reported download failure.
+The confirmed invocation is:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\04_download_ai_bundle.ps1 -AllowOfflineRevocationCheck
