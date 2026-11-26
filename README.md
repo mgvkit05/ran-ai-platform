@@ -1,9 +1,24 @@
 # RAN AI Platform
 
 Self-hosted 5G KPI analytics with local AI inference. The current deployment
-priority is profiling the source TAR/CSV layout before database ingestion.
+priority is full-row source validation before database ingestion.
 
-## Current command: profile the TAR sample
+## Current command: validate the vendor TAR format
+
+The sample contains 838 CSVs with 297 candidate schemas. The first four records
+define family, version, index and attribute headers. Transfer
+`scripts/12_validate_vendor_tar.py` to `$HOME/ran-ai/app/12_validate_vendor_tar.py`,
+then run on the AI server:
+
+```bash
+"$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/12_validate_vendor_tar.py"
+```
+
+This reads every row and prints a short summary; no database load or extraction
+occurs. Share the summary and retain the private report locally. See the
+[next-step instructions](docs/vendor-validation.md).
+
+## Completed step: profile the TAR sample
 
 ClickHouse startup and synthetic insert/query verification succeeded. The user
 uploaded a TAR collection, correcting the earlier ZIP assumption. Transfer
