@@ -3,6 +3,20 @@
 Self-hosted 5G KPI analytics with local AI inference. The current deployment
 priority is running persistent local GPT-OSS 20B inference on the offline AI server.
 
+## Next step: install ClickHouse offline
+
+The user confirmed that persistent Ollama and interactive Backspace editing work.
+Install the analytical database next using the [offline ClickHouse instructions](docs/offline-clickhouse-install.md).
+Download `scripts/08_download_clickhouse_bundle.ps1` and
+`scripts/09_install_clickhouse_offline.py` together on the office laptop, then run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\08_download_clickhouse_bundle.ps1 -AllowOfflineRevocationCheck
+```
+
+Transfer the complete generated bundle and run the installation command in the
+guide. This phase installs the executable without starting a database server.
+
 ## Current step: persistent local Ollama
 
 The first GPT-OSS 20B inference test succeeded using 32 threads at 14.32 tokens/s.
