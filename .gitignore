@@ -24,3 +24,4 @@ ran-ai-offline-bundle/
 *.part
 run/
 ran-ai-clickhouse-bundle/
+config/clickhouse-server/

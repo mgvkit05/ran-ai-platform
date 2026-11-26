@@ -1,9 +1,23 @@
 # RAN AI Platform
 
 Self-hosted 5G KPI analytics with local AI inference. The current deployment
-priority is running persistent local GPT-OSS 20B inference on the offline AI server.
+priority is starting the local analytical database alongside GPT-OSS 20B.
 
-## Next step: install ClickHouse offline
+## Current command: start and verify ClickHouse
+
+ClickHouse 26.9.40.9 installation succeeded. Transfer `scripts/10_manage_clickhouse.py`
+to the AI server, then run from its directory, without sudo:
+
+```bash
+"$HOME/ran-ai/venv/bin/python" 10_manage_clickhouse.py start
+"$HOME/ran-ai/venv/bin/python" 10_manage_clickhouse.py status
+```
+
+This starts an authenticated localhost database, verifies a synthetic table/query,
+and leaves ClickHouse running. Existing Ollama is unchanged. See the
+[local database instructions](docs/local-clickhouse.md) for limits, logs and stop commands.
+
+## Completed step: install ClickHouse offline
 
 The ClickHouse bundle has been uploaded to the AI server. Run this command
 on the **Linux AI server**, without sudo:
