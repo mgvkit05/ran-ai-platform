@@ -1,9 +1,23 @@
 # RAN AI Platform
 
 Self-hosted 5G KPI analytics with local AI inference. The current deployment
-priority is ingesting the complete source TAR while preserving all original values.
+priority is viewing the successfully loaded data before adding analytical tools.
 
-## Current command: ingest the complete TAR
+## Current command: view sample records locally
+
+The first archive loaded successfully: 838 CSVs, 273,853 rows, 3,520,845 counter
+fields, including all 187 blank locations. A rerun confirmed archive deduplication.
+Transfer `scripts/15_view_sample_data.py` to `$HOME/ran-ai/app/`, then run in SSH:
+
+```bash
+"$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/15_view_sample_data.py"
+```
+
+It queries ClickHouse locally and prints three source records with counter names
+and values. No laptop HTTP access or database changes are needed. Output contains
+real data; keep it on the lab systems. See [sample viewing instructions](docs/view-sample-data.md).
+
+## Completed step: ingest the complete TAR
 
 The source owner confirmed missing/blank index and LOCATION are valid data.
 Transfer `scripts/14_ingest_vendor_tar.py` to `$HOME/ran-ai/app/`, then run:
