@@ -11,6 +11,7 @@ Output contains real lab data. Keep it local; no report file is written.
 import argparse
 import json
 from pathlib import Path
+import re
 import sys
 import urllib.error
 import urllib.parse
@@ -38,8 +39,10 @@ def sample_sql(rows, counters, member=None):
 
 
 def fetch(opener, credentials, sql):
-    # Fixed SELECT queries only. Explicit read-only mode, local endpoint, no proxy.
-    parameters = urllib.parse.urlencode({'query': sql, 'readonly': '1'})
+    # ClickHouse makes HTTP GET read-only before applying URL settings. Trying
+    # to change readonly again here can fail with READONLY (Code 164).
+    # Fixed SELECT queries, GET-enforced read-only mode, local endpoint, no proxy.
+    parameters = urllib.parse.urlencode({'query': sql})
     request = urllib.request.Request('http://127.0.0.1:18123/?' + parameters,
                 headers={'X-ClickHouse-User': credentials['user'],
                          'X-ClickHouse-Key': credentials['password']}, method='GET')
@@ -47,8 +50,16 @@ def fetch(opener, credentials, sql):
         with opener.open(request, timeout=70) as response:
             return json.load(response)['data']
     except urllib.error.HTTPError as error:
-        # An error body can contain source values; do not dump it automatically.
-        raise RuntimeError('ClickHouse returned HTTP %d; confirm the database and ingestion views are available.' % error.code) from None
+        # Report diagnostic codes without exposing query data in an error body.
+        body = error.read(16384).decode('utf-8', errors='replace')
+        code = re.search(r'\bCode:\s*(\d+)', body)
+        names = re.findall(r'\(([A-Z][A-Z0-9_]{2,})\)', body)
+        detail = '; ClickHouse Code ' + code[1] if code else ''
+        if names:
+            detail += ' (' + names[-1] + ')'
+        if code and code[1] == '164':
+            detail += '; server rejected a read-only setting change'
+        raise RuntimeError('ClickHouse HTTP %d%s. No database changes were attempted.' % (error.code, detail)) from None
 
 
 def display(value):

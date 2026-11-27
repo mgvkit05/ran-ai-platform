@@ -42,10 +42,17 @@ more than once; source filenames distinguish those displayed records. Default
 selection is deterministic by archive hash, member ordinal and row ordinal.
 Sample size is bounded to 20 rows and 20 counters per row.
 
-Queries are fixed SELECT statements through HTTP GET with explicit read-only mode.
+Queries are fixed SELECT statements through HTTP GET, which ClickHouse makes
+read-only automatically. No `readonly` URL setting is sent: changing that setting
+after GET has already enabled read-only mode can cause Code 164 / HTTP 500.
 The script reuses local credentials, bypasses HTTP proxies, writes no files and
 makes no database changes. Use the committed views, not raw incomplete-attempt
 tables. Output includes real lab data: keep it local rather than posting screenshots
 containing identifiers, filenames or values. A generic success confirmation is
 enough. SQL-engine execution remains a target-server check; local tests verify
 query bounds, local/read-only requests and empty-value display.
+
+If an older version reported a generic HTTP 500, replace the script and rerun the
+same command. The updated version removes that setting conflict and prints the
+ClickHouse error number/symbol if another query error occurs, without dumping
+the response body or source values. No server restart or reingestion is required.
