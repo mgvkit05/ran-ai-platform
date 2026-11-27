@@ -1,5 +1,48 @@
 # Controlled counter queries and local AI explanations
 
+## Ask directly by counter name
+
+Transfer both updated `scripts/16_counter_tools.py` and `scripts/counter_specs.py`
+to `$HOME/ran-ai/app/`. Your existing documentation index can be reused; no rebuild
+or service restart is required.
+
+```bash
+"$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/16_counter_tools.py" ask --counter "AirMac" --ne-type ADPF "What does this counter measure?"
+```
+
+Replace `AirMac` with the exact counter name from the data or documentation.
+Matching ignores case and accepts the CSV label with or without its trailing
+unit suffix, such as `AirMac(count)`. This command does not require `search`,
+`samples` or `--pick`, and does not read or change the saved search selections.
+The question is optional; it defaults to asking what the counter measures.
+
+Supported NE types are `ADPF`, `uADPF`, `ACPF`, and `AUPF`. Samples are filtered
+by NE type before the row limit is applied. Default sample size is five rows;
+`--rows 1` through `--rows 20` is supported. `--location` applies an exact filter,
+including `--location ""` for valid blank locations.
+
+If several data matches exist, the command prints choices and does not call the
+model. Rerun using the displayed exact `--family`, `--data-version`, or
+`--schema-id` values, for example:
+
+```bash
+"$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/16_counter_tools.py" ask --counter "AirMac" --ne-type ADPF --family "EXACT FAMILY FROM OUTPUT" "Explain its definition and the sample values."
+```
+
+When the named counter has no loaded data for the NE type, a unique local
+documentation definition can still answer a definition question. The output
+explicitly identifies this as documentation only. Ambiguous documentation
+matches are listed for selection by `--family`; duplicates within the same
+family require workbook review. A requested data version/schema with no data
+does not silently fall back to documentation.
+
+Answers cite `[D1]` for documentation and `[R1]` etc. for sample observations.
+This initial `ask` command supports definitions and bounded samples, not natural
+language SQL, full-data maxima/totals, trends, time filtering or comparisons.
+The model is instructed to state when a question requires unavailable evidence.
+All database queries are fixed read-only templates with bound parameters.
+Questions and answers are not saved by this script.
+
 To include definitions from local Excel workbooks, follow the
 [counter specification setup](counter-specifications.md). Search and explain
 then include a unique NE type/family/counter match automatically.

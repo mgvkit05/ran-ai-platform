@@ -139,11 +139,13 @@ def find_definitions(records, counter, kind, family=None):
     return matches
 
 
-def definitions_for(root, item, observations):
+def definitions_for(root, item, observations, kind=None):
     path = root / 'knowledge/counter-spec/index.json'
     if not path.exists():
         return [], 'No counter specification index. Run counter_specs.py build.'
-    kinds = {ne_type(row.get('ne_id', '')) for row in observations}
+    kinds = {ne_type(row.get('ne_id', '')) for row in observations} if observations else {kind}
+    if kind is not None and observations and kinds != {kind}:
+        return [], 'Documentation NE type does not match the observations.'
     if None in kinds or len(kinds) != 1:
         return [], 'Documentation lookup needs one identifiable NE type in the sample.'
     index = json.loads(path.read_text(encoding='utf-8'))

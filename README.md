@@ -1,5 +1,18 @@
 # RAN AI Platform
 
+## Ask by counter name
+
+Update `scripts/16_counter_tools.py` and `scripts/counter_specs.py` in
+`$HOME/ran-ai/app/`, then ask without a prior search or `--pick`:
+
+```bash
+"$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/16_counter_tools.py" ask --counter "AirMac" --ne-type ADPF "What does this counter measure?"
+```
+
+Use the exact counter name. The command retrieves matching local documentation
+and NE-filtered sample data, or lists ambiguous matches for you to narrow.
+See [direct counter questions and available filters](docs/counter-tools.md).
+
 ## Excel counter specifications
 
 Transfer `scripts/counter_specs.py` and the updated `scripts/16_counter_tools.py`
