@@ -1,8 +1,11 @@
 import importlib.util
+import contextlib
+import io
 import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 from xml.sax.saxutils import escape
 
@@ -32,6 +35,29 @@ def workbook(path):
 
 
 class CounterSpecsTests(unittest.TestCase):
+    def test_failed_import_identifies_version_and_location_without_cell_values(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            directory = root / 'ran-ai/knowledge/counter-spec'
+            directory.mkdir(parents=True)
+            (directory / 'ACPF.xlsx').write_bytes(b'fixture')
+            (directory / 'index.json').write_text('previous index')
+            output = io.StringIO()
+            def failing_reader(path):
+                private_cell = 'PRIVATE_CELL_VALUE'
+                raise ValueError('not enough values to unpack (expected 2, got 1)')
+            with patch.object(specs.Path, 'home', return_value=root), \
+                 patch('sys.argv', ['counter_specs.py', 'build']), \
+                 patch.object(specs, 'workbook_records', failing_reader), \
+                 contextlib.redirect_stdout(output):
+                self.assertEqual(specs.main(), 1)
+            text = output.getvalue()
+            self.assertIn('counter-specs-v3', text)
+            self.assertIn('Reading workbook 1 of 1', text)
+            self.assertIn('in failing_reader', text)
+            self.assertNotIn('PRIVATE_CELL_VALUE', text)
+            self.assertEqual((directory / 'index.json').read_text(), 'previous index')
+
     def test_single_cell_merge_reference_preserves_counter_definitions(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / 'ACPF.xlsx'

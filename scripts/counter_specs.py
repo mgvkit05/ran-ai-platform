@@ -13,11 +13,13 @@ import os
 from pathlib import Path
 import posixpath
 import re
+import traceback
 import xml.etree.ElementTree as ET
 import zipfile
 
 NS = {'s': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
 NE_TYPES = ('ADPF', 'uADPF', 'ACPF', 'AUPF')
+VERSION = 'counter-specs-v3'
 
 
 def normalized(value):
@@ -157,12 +159,16 @@ def definitions_for(root, item, observations):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--version', action='version', version=VERSION)
     actions = parser.add_subparsers(dest='action', required=True)
     actions.add_parser('build')
     lookup = actions.add_parser('lookup')
     lookup.add_argument('counter')
     lookup.add_argument('--ne-type', required=True, choices=NE_TYPES)
     args = parser.parse_args()
+    script = Path(__file__).resolve()
+    print('=== %s; script=%s; sha256=%s ===' %
+          (VERSION, script, hashlib.sha256(script.read_bytes()).hexdigest()[:12]), flush=True)
     os.umask(0o077)
     directory = Path.home() / 'ran-ai/knowledge/counter-spec'
     try:
@@ -171,8 +177,8 @@ def main():
             if not paths:
                 raise ValueError('No XLSX documents in ' + str(directory))
             records = []
-            for path in paths:
-                print('Reading workbook %d of %d...' % (len({r['source']['workbook'] for r in records}) + 1, len(paths)), flush=True)
+            for number, path in enumerate(paths, 1):
+                print('Reading workbook %d of %d...' % (number, len(paths)), flush=True)
                 records.extend(workbook_records(path))
             temporary = directory / 'index.json.tmp'
             temporary.write_text(json.dumps({'version': 1, 'records': records}, ensure_ascii=False), encoding='utf-8')
@@ -187,6 +193,11 @@ def main():
         return 0
     except (OSError, ValueError, KeyError, StopIteration, zipfile.BadZipFile, ET.ParseError) as error:
         print('FAILED: %s. Existing index and source documents retained.' % error)
+        # Print locations only, never source lines, cell values or local variables.
+        print('Diagnostic: %s; %s' % (VERSION, type(error).__name__))
+        for frame in traceback.extract_tb(error.__traceback__)[-6:]:
+            print('  at %s:%d in %s' % (Path(frame.filename).name, frame.lineno, frame.name))
+        print('Share the version banner, workbook number, FAILED line and Diagnostic locations only.')
         return 1
 
 

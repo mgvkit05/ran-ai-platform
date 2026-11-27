@@ -31,6 +31,11 @@ ACPF and AUPF. Ambiguous or unsupported populated NE cells stop import for revie
 Share only the success summary, including workbook and definition counts.
 Keep the index, documents and lookup output private on the server.
 
+On failure, version `counter-specs-v3` prints the running script path and hash,
+workbook number and compact function/line locations. Share that short diagnostic
+output. No worksheet values or local variables are included in the location list.
+If the version banner is absent, the server is running an older copy.
+
 ## Read a definition without the model
 
 ```bash
