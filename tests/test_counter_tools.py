@@ -19,6 +19,31 @@ def observation(value, entity='PRIVATE_ENTITY'):
 
 
 class CounterToolsTests(unittest.TestCase):
+    def test_search_lists_and_saves_more_than_ten_matches_by_default(self):
+        catalog = [{'counter_label': 'Air%d' % i, 'unit_label': 'count',
+                    'source_files': 1, 'schema_id': 'a' * 64,
+                    'family': 'Air', 'version': '1'} for i in range(15)]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / 'ran-ai'
+            (root / 'config/clickhouse-server').mkdir(parents=True)
+            (root / 'config/clickhouse-server/credentials.json').write_text('{}')
+            output = io.StringIO()
+            with patch.object(tools.Path, 'home', return_value=Path(temporary)), \
+                 patch('sys.argv', ['16_counter_tools.py', 'search', 'air']), \
+                 patch.object(tools, 'db', return_value=catalog) as query, \
+                 contextlib.redirect_stdout(output):
+                self.assertEqual(tools.main(), 0)
+            self.assertNotIn('LIMIT', query.call_args.args[0])
+            self.assertEqual(query.call_args.args[1], {'term': 'air'})
+            self.assertIn('[15]', output.getvalue())
+            self.assertEqual(json.loads((root / 'run/counter-search.json').read_text()), catalog)
+
+    def test_search_optional_limit_is_bound_and_accepts_more_than_fifty(self):
+        self.assertIn('LIMIT {limit:UInt32}', tools.search_sql(100))
+        for limit in (0, -1, 4294967296):
+            with self.assertRaises(ValueError):
+                tools.search_sql(limit)
+
     def test_exact_decimal_extrema_and_empty_or_nonnumeric_values(self):
         result = tools.sample_summary([observation('2.00000000000000000001'), observation('2.00000000000000000002'),
                                        observation('0.00'), observation(''), observation('NaN')])

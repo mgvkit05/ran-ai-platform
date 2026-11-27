@@ -4,6 +4,7 @@ Save as: /home/sysadmin/ran-ai/app/16_counter_tools.py
 Run on the AI server, from any directory, without sudo:
   "$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/16_counter_tools.py" inventory
   "$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/16_counter_tools.py" search "throughput"
+Search lists all matches by default; optionally append --limit 10 for a shorter list.
   "$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/16_counter_tools.py" samples --pick 1
   "$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/16_counter_tools.py" explain --pick 1
 Only local ClickHouse/Ollama endpoints are used. Keep real output on lab systems.
@@ -50,7 +51,13 @@ SEARCH_SQL = '''SELECT schema_id, family, version, counter_ordinal,
   WHERE positionCaseInsensitiveUTF8(counter_names[counter_ordinal], {term:String}) > 0
      OR positionCaseInsensitiveUTF8(family, {term:String}) > 0
   GROUP BY schema_id,family,version,counter_ordinal,counter_label,unit_label
-  ORDER BY counter_label,family,version,schema_id,counter_ordinal LIMIT {limit:UInt32} FORMAT JSON'''
+  ORDER BY counter_label,family,version,schema_id,counter_ordinal'''
+
+
+def search_sql(limit=None):
+    if limit is not None and not 1 <= limit <= 4294967295:
+        raise ValueError('limit must be a positive integer no greater than 4294967295')
+    return SEARCH_SQL + (' LIMIT {limit:UInt32}' if limit is not None else '') + ' FORMAT JSON'
 
 
 def samples_sql(location_selected):
@@ -221,7 +228,7 @@ def main():
     actions.add_parser('inventory')
     search = actions.add_parser('search')
     search.add_argument('term')
-    search.add_argument('--limit', type=int, default=10)
+    search.add_argument('--limit', type=int, help='optional maximum results; defaults to all matches')
     for name in ('samples', 'explain'):
         sample = actions.add_parser(name)
         sample.add_argument('--pick', type=int, default=1)
@@ -239,9 +246,13 @@ def main():
             print(json.dumps(dict(rows, **files), indent=2))
             print('Next: search "throughput", then samples --pick 1 or explain --pick 1.')
         elif args.action == 'search':
-            if not args.term.strip() or len(args.term) > 128 or not 1 <= args.limit <= 50:
-                raise ValueError('supply a search term of 1-128 characters and limit 1-50')
-            catalog = db(SEARCH_SQL, {'term': args.term, 'limit': args.limit}, credentials)
+            if not args.term.strip() or len(args.term) > 128:
+                raise ValueError('supply a search term of 1-128 characters')
+            sql = search_sql(args.limit)
+            parameters = {'term': args.term}
+            if args.limit is not None:
+                parameters['limit'] = args.limit
+            catalog = db(sql, parameters, credentials)
             run_dir = root / 'run'
             run_dir.mkdir(exist_ok=True)
             path = run_dir / 'counter-search.json'
@@ -250,15 +261,16 @@ def main():
                 json.dump(catalog, output)
             temporary.chmod(0o600)
             temporary.replace(path)
-            print('=== Search matches (bounded; counter label or measurement family) ===')
+            print('=== Search matches (all by default; counter label or measurement family) ===')
+            print('Listed items: %d%s' % (len(catalog), ' (all matches)' if args.limit is None else ''))
             for index, item in enumerate(catalog, 1):
                 print('[%d] %s; unit=%s; source_files=%s; header_layout=%s' %
                       (index, quoted(item['counter_label']), quoted(item['unit_label']), item['source_files'], item['schema_id'][:12]))
                 print('    family=%s; version=%s' % (quoted(item['family']), quoted(item['version'])))
             if not catalog:
                 print('No match. Try a shorter counter-name or measurement-family fragment.')
-            elif len(catalog) == args.limit:
-                print('Result limit reached; narrow the term to see a more specific selection.')
+            elif args.limit is not None and len(catalog) == args.limit:
+                print('Requested limit reached; omit --limit to include any additional matches.')
             print('Selection numbers refer only to this latest search; use --pick N next.')
         else:
             if not 1 <= args.rows <= 20:

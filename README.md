@@ -78,6 +78,9 @@ Choose a numbered search result before requesting samples/explanation. Fixed,
 parameterized read-only queries retrieve bounded observations; GPT-OSS explains
 those observations without SQL access. Keep real output local. See
 [counter-tool instructions and limits](docs/counter-tools.md).
+Search lists all matching items by default. Append `--limit 10` only when you want
+a shorter list; transfer the updated `scripts/16_counter_tools.py` to the server's
+`$HOME/ran-ai/app/16_counter_tools.py` to use this behavior.
 
 ## Completed step: view sample records locally
 

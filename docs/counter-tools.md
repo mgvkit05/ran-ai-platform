@@ -74,9 +74,10 @@ Shows committed CSV/row counts, exact header-layout count and UTC coverage.
 ```
 
 Search is a case-insensitive substring of counter label OR measurement family.
-Change the keyword to any known counter-name fragment. Up to ten numbered results
-are displayed by default (`--limit 1` through `--limit 50` is supported). If a
-result limit is reached, narrow the keyword. Exact family, version, header layout
+Change the keyword to any known counter-name fragment. All numbered matches
+are displayed and saved by default. For a shorter list, optionally append
+`--limit 10` (a positive integer, up to 4294967295). Omit `--limit` to see all matches.
+Exact family, version, header layout
 and counter position define each result, avoiding the assumption that similarly
 named counters from different schemas are interchangeable.
 
