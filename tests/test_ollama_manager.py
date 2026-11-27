@@ -1,4 +1,7 @@
 import importlib.util
+import contextlib
+import io
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -49,6 +52,19 @@ class ManagerTests(unittest.TestCase):
         self.assertEqual(warmup['options']['num_batch'], 32)
         self.assertEqual(question['options']['num_batch'], 32)
         self.assertEqual(question['options']['num_thread'], 8)
+
+    def test_question_stream_prints_answer_and_timings_without_reasoning(self):
+        events = [{'thinking': 'PRIVATE_REASONING'}, {'response': 'Unknown counter definition.'},
+                  {'done': True, 'done_reason': 'stop', 'eval_count': 5}]
+        class Opener:
+            def open(self, request, timeout):
+                return io.BytesIO(('\n'.join(json.dumps(event) for event in events) + '\n').encode())
+        output = io.StringIO()
+        with patch.object(manager.urllib.request, 'build_opener', return_value=Opener()), contextlib.redirect_stdout(output):
+            result = manager.stream_question({'stream': True})
+        self.assertEqual(result['response'], 'Unknown counter definition.')
+        self.assertIn('Timings:', output.getvalue())
+        self.assertNotIn('PRIVATE_REASONING', output.getvalue())
 
 
 if __name__ == '__main__':

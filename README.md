@@ -3,6 +3,22 @@
 Self-hosted 5G KPI analytics with local AI inference. The current deployment
 priority is connecting controlled counter queries to local AI explanations.
 
+## Current client update: streamed general questions
+
+The recovery profile loaded in 11.92 seconds, returned a minimal answer in 3.83
+seconds, and completed a counter explanation in 14.14 seconds. Keep the working
+8-thread / 32-batch / disabled-flash profile. General `ask` was still buffering
+responses; the updated manager now streams progress with a shorter default budget.
+Replace `scripts/07_manage_ollama.py` under `$HOME/ran-ai/app/`, then run:
+
+```bash
+"$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/07_manage_ollama.py" ask "What does this counter measure?"
+```
+
+Expect `ask-streaming-v3`. No restart is needed for this client update. Generic
+questions do not retrieve data or verified vendor definitions. See the
+[persistent instance instructions](docs/persistent-ollama.md).
+
 ## Current recovery test: smaller CPU startup profile
 
 The last diagnostic showed only an idle API server after canceled loading, with

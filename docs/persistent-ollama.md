@@ -1,5 +1,26 @@
 # Persistent local Ollama instance
 
+The current `ask` implementation shows `ask-streaming-v3`, streams answers, prints
+progress every 10 seconds and reports load/prompt/generation timing. Its default
+generated-token ceiling is 256, including reasoning, instead of the former 1,024.
+For an explicitly longer answer append `--max-tokens 512` (allowed range 32-1024).
+An idle stream times out after 60 seconds; elapsed time is checked against 120
+seconds per event. This is not a hard wall-clock deadline. The existing recovery
+thread/batch settings are preserved, and the model remains loaded.
+
+To update a silent older ask client: press Ctrl+C, replace only the manager script
+under `$HOME/ran-ai/app/`, then rerun:
+
+```bash
+"$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/07_manage_ollama.py" ask "What does this counter measure?"
+```
+
+There is no restart solely to apply this client-side update. If an earlier request
+remains stuck in the server, use the documented stop/start recovery profile. General
+ask has no database tools or vendor dictionary: an ambiguous counter name is not
+enough to establish a verified definition. It now explicitly asks the model to
+acknowledge that uncertainty rather than guess.
+
 For the current loading stall, use the [reversible CPU recovery profile](ollama-recovery.md).
 The manager now supports `--batch-size` and `--disable-flash` at start, reports
 warm-up progress, and records the batch size so subsequent questions use the same

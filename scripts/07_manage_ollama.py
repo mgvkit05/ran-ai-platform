@@ -81,6 +81,55 @@ def generation(threads, prompt='', batch_size=512):
             'num_ctx': 2048, 'num_batch': batch_size, 'num_predict': 1024, 'temperature': 0}}
 
 
+def stream_question(payload):
+    """Show answer chunks and progress, never private reasoning text."""
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    request = urllib.request.Request('http://' + HOST + '/api/generate',
+                data=json.dumps(payload).encode(), headers={'Content-Type': 'application/json'})
+    began = time.monotonic()
+    finished = threading.Event()
+    progress = {'phase': 'waiting / prompt processing', 'reasoning': 0}
+    def heartbeat():
+        while not finished.wait(10):
+            print('\n[%.0fs: %s; reasoning chunks=%d]' %
+                  (time.monotonic() - began, progress['phase'], progress['reasoning']), flush=True)
+    threading.Thread(target=heartbeat, daemon=True).start()
+    fragments = []
+    try:
+        with opener.open(request, timeout=60) as response:
+            for line in response:
+                if time.monotonic() - began > 120:
+                    raise RuntimeError('Question exceeded 120 seconds; request closed.')
+                if not line.strip():
+                    continue
+                event = json.loads(line)
+                if event.get('error'):
+                    raise RuntimeError('Ollama reported a generation error; inspect its operational log.')
+                if event.get('thinking'):
+                    progress['phase'] = 'reasoning (text hidden)'
+                    progress['reasoning'] += 1
+                if event.get('response'):
+                    progress['phase'] = 'writing answer'
+                    fragments.append(event['response'])
+                    print(event['response'], end='', flush=True)
+                if event.get('done'):
+                    print(flush=True)
+                    event['response'] = ''.join(fragments)
+                    print('Timings: wall=%.2fs; load=%.2fs; prompt=%.2fs; generation=%.2fs' %
+                          (time.monotonic() - began, event.get('load_duration', 0) / 1e9,
+                           event.get('prompt_eval_duration', 0) / 1e9, event.get('eval_duration', 0) / 1e9))
+                    print('Tokens: prompt=%s; generated=%s; stop=%s' %
+                          (event.get('prompt_eval_count', '?'), event.get('eval_count', '?'), event.get('done_reason', '?')))
+                    return event
+        raise RuntimeError('Generation stream ended without completion.')
+    except urllib.error.HTTPError as error:
+        raise RuntimeError('Ollama HTTP %d; inspect its local operational log.' % error.code) from None
+    except TimeoutError:
+        raise RuntimeError('No model stream data for 60 seconds. Check the managed server status and log.') from None
+    finally:
+        finished.set()
+
+
 def load_state(path):
     if not path.exists():
         return None
@@ -241,6 +290,7 @@ def main():
     parser.add_argument('--threads', type=int, help='start only; default 32 or fewer if restricted')
     parser.add_argument('--batch-size', type=int, default=512, help='start only; CPU batch size, 1-512')
     parser.add_argument('--disable-flash', action='store_true', help='start only; disable flash attention for a recovery test')
+    parser.add_argument('--max-tokens', type=int, default=256, help='ask only; generated-token ceiling including reasoning, 32-1024 (default 256)')
     args = parser.parse_args()
     if not sys.platform.startswith('linux'):
         parser.error('run on the Linux AI server')
@@ -277,14 +327,20 @@ def main():
             prompt = args.prompt if args.prompt is not None else read_question()
             if not prompt.strip():
                 raise ValueError('question is empty')
-            began = time.monotonic()
-            result = api('/api/generate', generation(state['threads'], prompt, state.get('batch_size', 512)), timeout=180)
-            print(result.get('response', '').strip() or '[No final response within the token budget]')
-            if result.get('eval_duration'):
-                print('Generation: %.2f tokens/s; elapsed: %.2f seconds' %
-                      (result.get('eval_count', 0) * 1e9 / result['eval_duration'], time.monotonic() - began))
+            if not 32 <= args.max_tokens <= 1024:
+                raise ValueError('max-tokens must be between 32 and 1024')
+            payload = generation(state['threads'], prompt, state.get('batch_size', 512))
+            payload['stream'] = True
+            payload['options']['num_predict'] = args.max_tokens
+            payload['system'] = ('Answer briefly, usually within 120 words. If a specialized counter name is '
+                'ambiguous, say you cannot verify its definition without vendor documentation and ask for '
+                'context. Do not invent counter definitions. You have no database tools or vendor counter '
+                'dictionary in this chat. Give the final answer without displaying private reasoning.')
+            print('=== ask-streaming-v3: threads=%d batch=%d max_tokens=%d ===' %
+                  (state['threads'], state.get('batch_size', 512), args.max_tokens), flush=True)
+            result = stream_question(payload)
             if result.get('done_reason') == 'length':
-                print('Generation reached the 1024-token limit; the answer may be incomplete.')
+                print('Generation reached the token limit; the answer may be incomplete. Use --max-tokens for a larger budget if needed.')
             if not result.get('done') or not result.get('response', '').strip():
                 raise RuntimeError('no completed final response; server remains running for retry')
     except (Exception, KeyboardInterrupt) as error:
