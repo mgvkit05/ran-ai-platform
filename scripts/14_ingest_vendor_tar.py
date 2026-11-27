@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Load all vendor TAR CSV records into ClickHouse without discarding blanks.
-Run using $HOME/ran-ai/venv/bin/python. Uses only the standard library.
+Save on the AI server as: /home/sysadmin/ran-ai/app/14_ingest_vendor_tar.py
+Run from any directory, without sudo, while ClickHouse is running:
+  "$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/14_ingest_vendor_tar.py"
+The newest completed TAR in landing is selected automatically.
+Uses only the standard library.
 """
 import argparse
 from collections import Counter
