@@ -79,6 +79,21 @@ class CounterToolsTests(unittest.TestCase):
         self.assertEqual(payload['options']['num_ctx'], 2048)
         self.assertEqual(payload['options']['num_predict'], 192)
 
+    def test_explanation_reuses_recovery_profile_without_batch_reload(self):
+        evidence = tools.evidence_for({'counter_label': 'Test', 'unit_label': 'count', 'family': 'Test', 'version': '1'}, [observation('14')])
+        captured = []
+        def transport(request):
+            captured.append(json.loads(request.data))
+            return {'done': True, 'response': 'Bounded sample [R1].'}
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'run').mkdir()
+            (root / 'run/ollama-managed.json').write_text(json.dumps({'threads': 8, 'batch_size': 32}))
+            with patch.object(tools, 'stream_explanation', transport), contextlib.redirect_stdout(io.StringIO()):
+                tools.explain(root, evidence)
+        self.assertEqual(captured[0]['options']['num_thread'], 8)
+        self.assertEqual(captured[0]['options']['num_batch'], 32)
+
     def test_stream_reports_timings_without_printing_reasoning(self):
         events = [{'thinking': 'PRIVATE_REASONING'}, {'response': 'Sample [R1].'},
                   {'done': True, 'eval_count': 4, 'eval_duration': 1000000000, 'done_reason': 'stop'}]

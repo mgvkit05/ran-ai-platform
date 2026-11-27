@@ -3,6 +3,22 @@
 Self-hosted 5G KPI analytics with local AI inference. The current deployment
 priority is connecting controlled counter queries to local AI explanations.
 
+## Current recovery test: smaller CPU startup profile
+
+The last diagnostic showed only an idle API server after canceled loading, with
+no model listed. The cause of the warm-up stall is not yet confirmed. Transfer
+the updated `scripts/07_manage_ollama.py` and `scripts/16_counter_tools.py` to
+`$HOME/ran-ai/app/`, interrupt the waiting question, then run:
+
+```bash
+"$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/07_manage_ollama.py" stop
+"$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/07_manage_ollama.py" start --threads 8 --batch-size 32 --disable-flash
+```
+
+Only after SUCCESS, test a minimal question. If warm-up remains pending, collect
+diagnostic 17 from a second SSH session while the runner is active. See the
+[recovery test instructions](docs/ollama-recovery.md) for commands and reversal.
+
 ## Current diagnostic: inspect Ollama after explanation timeout
 
 The previously working manager's minimal question also stalls. Transfer

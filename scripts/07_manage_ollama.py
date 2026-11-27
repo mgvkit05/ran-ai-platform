@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Manage a persistent local-only Ollama process: start, status, ask, stop.
-Run: "$HOME/ran-ai/venv/bin/python" 07_manage_ollama.py start
+Save as: /home/sysadmin/ran-ai/app/07_manage_ollama.py
+Run: "$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/07_manage_ollama.py" start
+Recovery experiment (after stop): append --threads 8 --batch-size 32 --disable-flash
 No sudo, package downloads or system service changes. Restart manually after reboot.
 """
 import argparse
@@ -12,6 +14,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -72,10 +75,10 @@ def api(endpoint, data=None, timeout=10):
         raise RuntimeError('Ollama HTTP %d: %s' % (error.code, error.read(4096).decode(errors='replace'))) from None
 
 
-def generation(threads, prompt=''):
+def generation(threads, prompt='', batch_size=512):
     return {'model': MODEL, 'prompt': prompt, 'stream': False, 'think': 'low',
             'keep_alive': -1, 'options': {'num_thread': threads, 'num_gpu': 0,
-            'num_ctx': 2048, 'num_predict': 1024, 'temperature': 0}}
+            'num_ctx': 2048, 'num_batch': batch_size, 'num_predict': 1024, 'temperature': 0}}
 
 
 def load_state(path):
@@ -103,7 +106,7 @@ def stop(state):
         pass
 
 
-def start(root, state_path, requested_threads):
+def start(root, state_path, requested_threads, batch_size=512, disable_flash=False):
     import resource
     existing = load_state(state_path)
     if existing and owned(existing):
@@ -120,6 +123,8 @@ def start(root, state_path, requested_threads):
     threads = min(32, len(cpus)) if requested_threads is None else requested_threads
     if not 1 <= threads <= len(cpus):
         raise ValueError('thread count must be between 1 and the allowed logical CPU count')
+    if not 1 <= batch_size <= 512:
+        raise ValueError('batch size must be between 1 and 512')
     with socket.socket() as probe:
         try:
             probe.bind(('127.0.0.1', 11435))
@@ -132,6 +137,8 @@ def start(root, state_path, requested_threads):
                        OLLAMA_KEEP_ALIVE='-1', OLLAMA_NUM_PARALLEL='1', OLLAMA_MAX_LOADED_MODELS='1',
                        OLLAMA_MAX_QUEUE='2', OLLAMA_CONTEXT_LENGTH='2048', OLLAMA_LOAD_TIMEOUT='5m',
                        OLLAMA_NOPRUNE='1', OLLAMA_DEBUG='0', CUDA_VISIBLE_DEVICES='-1', HIP_VISIBLE_DEVICES='-1')
+    if disable_flash:
+        environment['OLLAMA_FLASH_ATTENTION'] = 'false'
 
     def limits():
         soft, hard = resource.getrlimit(resource.RLIMIT_AS)
@@ -150,7 +157,8 @@ def start(root, state_path, requested_threads):
                                    stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
                                    preexec_fn=limits, close_fds=True)
     state = {'pid': process.pid, 'start_ticks': identity(process.pid), 'binary': str(binary),
-             'threads': threads, 'cpus': sorted(cpus), 'log': str(log_path), 'host': HOST}
+             'threads': threads, 'batch_size': batch_size, 'disable_flash': disable_flash,
+             'cpus': sorted(cpus), 'log': str(log_path), 'host': HOST}
     try:
         # Confirm executable identity once exec has completed before writing control state.
         deadline = time.monotonic() + 60
@@ -170,14 +178,28 @@ def start(root, state_path, requested_threads):
         partial.write_text(json.dumps(state, indent=2))
         partial.replace(state_path)
         print('Ollama %s started at http://%s; inference threads: %d.' % (version.get('version'), HOST, threads), flush=True)
-        print('Loading GPT-OSS 20B and keeping it resident. Allow up to 10 minutes.', flush=True)
-        result = api('/api/generate', generation(threads), timeout=600)
+        print('Startup profile: threads=%d, batch=%d, flash=%s' %
+              (threads, batch_size, 'disabled' if disable_flash else 'runtime default'), flush=True)
+        print('Log: ' + str(log_path), flush=True)
+        print('Loading GPT-OSS 20B; warm-up idle timeout is 180 seconds.', flush=True)
+        warmup_started = time.monotonic()
+        warmup_done = threading.Event()
+        def progress():
+            while not warmup_done.wait(10):
+                print('[%.0fs: awaiting model warm-up; run diagnostic 17 in a second SSH session if delayed]' %
+                      (time.monotonic() - warmup_started), flush=True)
+        threading.Thread(target=progress, daemon=True).start()
+        try:
+            result = api('/api/generate', generation(threads, batch_size=batch_size), timeout=180)
+        finally:
+            warmup_done.set()
         if not result.get('done'):
             raise RuntimeError('model warm-up did not complete')
         running = api('/api/ps')
         if not any(item.get('name') == MODEL or item.get('model') == MODEL for item in running.get('models', [])):
             raise RuntimeError('model was not resident after warm-up')
         print('SUCCESS: persistent local Ollama is ready; GPT-OSS 20B is loaded.')
+        print('Warm-up elapsed: %.2f seconds' % (time.monotonic() - warmup_started))
         print('Log: ' + str(log_path))
         print('No boot service installed. Run start again after a reboot.')
     except BaseException:
@@ -204,6 +226,8 @@ def status(state):
     version = api('/api/version')
     running = api('/api/ps')
     print('RUNNING: Ollama %s at http://%s; threads: %d' % (version.get('version'), HOST, state['threads']))
+    print('Batch: %d; flash attention override: %s' %
+          (state.get('batch_size', 512), 'disabled' if state.get('disable_flash') else 'runtime default'))
     for model in running.get('models', []):
         print('Loaded: %s; reported memory: %.2f GiB' % (model.get('name'), model.get('size', 0) / 1024 ** 3))
     print('Log: ' + state['log'])
@@ -215,6 +239,8 @@ def main():
     parser.add_argument('action', choices=('start', 'status', 'ask', 'stop'))
     parser.add_argument('prompt', nargs='?', help='ask only; omitted to enter interactively')
     parser.add_argument('--threads', type=int, help='start only; default 32 or fewer if restricted')
+    parser.add_argument('--batch-size', type=int, default=512, help='start only; CPU batch size, 1-512')
+    parser.add_argument('--disable-flash', action='store_true', help='start only; disable flash attention for a recovery test')
     args = parser.parse_args()
     if not sys.platform.startswith('linux'):
         parser.error('run on the Linux AI server')
@@ -233,7 +259,7 @@ def main():
             with (run_dir / 'ollama-manager.lock').open('a') as lock:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 if args.action == 'start':
-                    start(root, state_path, args.threads)
+                    start(root, state_path, args.threads, args.batch_size, args.disable_flash)
                 else:
                     state = load_state(state_path)
                     if state and owned(state):
@@ -252,7 +278,7 @@ def main():
             if not prompt.strip():
                 raise ValueError('question is empty')
             began = time.monotonic()
-            result = api('/api/generate', generation(state['threads'], prompt), timeout=600)
+            result = api('/api/generate', generation(state['threads'], prompt, state.get('batch_size', 512)), timeout=180)
             print(result.get('response', '').strip() or '[No final response within the token budget]')
             if result.get('eval_duration'):
                 print('Generation: %.2f tokens/s; elapsed: %.2f seconds' %

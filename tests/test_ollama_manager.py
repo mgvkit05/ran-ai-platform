@@ -43,6 +43,13 @@ class ManagerTests(unittest.TestCase):
         self.assertEqual(question['options']['num_gpu'], 0)
         self.assertEqual(question['options']['num_ctx'], 2048)
 
+    def test_recovery_batch_is_preserved_for_questions(self):
+        warmup = manager.generation(8, batch_size=32)
+        question = manager.generation(8, 'Reply OK', 32)
+        self.assertEqual(warmup['options']['num_batch'], 32)
+        self.assertEqual(question['options']['num_batch'], 32)
+        self.assertEqual(question['options']['num_thread'], 8)
+
 
 if __name__ == '__main__':
     unittest.main()

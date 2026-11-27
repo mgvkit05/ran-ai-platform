@@ -1,5 +1,10 @@
 # Persistent local Ollama instance
 
+For the current loading stall, use the [reversible CPU recovery profile](ollama-recovery.md).
+The manager now supports `--batch-size` and `--disable-flash` at start, reports
+warm-up progress, and records the batch size so subsequent questions use the same
+load settings. Warm-up and question idle timeouts are 180 seconds.
+
 The first CPU inference test succeeded on November 26, 2026: Ollama 0.40.18,
 GPT-OSS 20B, 32 inference threads, 14.32 generated tokens/second, 12.67 seconds
 model loading and 15.13 seconds total for the short synthetic request. This is

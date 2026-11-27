@@ -2,6 +2,11 @@
 
 ## Current diagnostic: explanation timed out before receiving output
 
+The next test is the [reversible CPU recovery profile](ollama-recovery.md), which
+uses 8 threads, batch size 32 and disabled flash attention. Update both manager
+and counter tool; the tool now reads the recorded batch size as well as threads.
+The cause is not established by the previous idle snapshot.
+
 The server log shows model warm-up followed by client disconnection and canceled
 loading. A minimal question through the previously working manager also stalls,
 so this is not isolated to the database explanation prompt. The cause of the
