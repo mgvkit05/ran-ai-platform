@@ -1,12 +1,26 @@
 # RAN AI Platform
 
 Self-hosted 5G KPI analytics with local AI inference. The current deployment
-priority is reviewing the source's valid blank-index/location records before ingestion.
+priority is ingesting the complete source TAR while preserving all original values.
 
-## Current command: identify blank-index/location CSVs
+## Current command: ingest the complete TAR
 
-The user confirmed all source data must be preserved. Ingestion is paused while
-the user explains the 28 files with blank index and LOCATION fields. Transfer
+The source owner confirmed missing/blank index and LOCATION are valid data.
+Transfer `scripts/14_ingest_vendor_tar.py` to `$HOME/ran-ai/app/`, then run:
+
+```bash
+"$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/14_ingest_vendor_tar.py"
+```
+
+ClickHouse must be running. The loader includes all CSVs/rows, stores original
+strings and metadata, verifies counts, and publishes only complete loads. Rerun
+after success to verify byte-identical archive deduplication. See the
+[complete ingestion instructions](docs/tar-ingestion.md). Share only its count summary.
+
+## Completed review: identify blank-index/location CSVs
+
+The user confirmed all source data must be preserved and these fields may be
+blank or absent. To inspect the original diagnostic list if needed, transfer
 `scripts/13_list_blank_location_files.py` to `$HOME/ran-ai/app/`, then run:
 
 ```bash

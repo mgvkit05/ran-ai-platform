@@ -104,6 +104,8 @@ def validate_csv(content):
             missing_fields = [COMMON[index] for index, value in enumerate(row[:7]) if not value.strip()]
             if missing_fields:
                 empty_fields.update(missing_fields)
+            # The source owner confirmed blank LOCATION is valid source data.
+            if any(name != 'LOCATION' for name in missing_fields):
                 issues['empty_common_field'] += 1
                 invalid = True
             if not validate_time(row[3].strip(), row[4].strip()):
@@ -137,7 +139,8 @@ def validate_csv(content):
         issues['csv_parse_error'] += 1
     if header is None:
         issues['missing_attribute_header'] += 1
-    for key in ('family', 'version', 'index'):
+    # Missing or blank index metadata is explicitly valid for these exports.
+    for key in ('family', 'version'):
         if not result['metadata'].get(key):
             issues['missing_' + key] += 1
     result['periods_raw'] = dict(periods)

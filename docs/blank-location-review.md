@@ -1,8 +1,9 @@
 # Identify CSV files with blank index and LOCATION
 
-Ingestion is paused while the user explains these source records. The source
-data is authoritative: blank metadata is not grounds to discard any files or rows.
-No database loading script has been deployed for this step.
+Review is complete: the user confirmed that absent/blank index and LOCATION are
+valid and all files/rows must be processed. No measurement scope is inferred.
+The diagnostic below remains available for local inspection. Continue with the
+[TAR ingestion step](tar-ingestion.md) to load the complete source data.
 
 Transfer `scripts/13_list_blank_location_files.py` to
 `$HOME/ran-ai/app/13_list_blank_location_files.py` on the AI server, then run:

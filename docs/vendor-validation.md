@@ -42,7 +42,8 @@ but no data row values. Generated files have private permissions.
 
 ## Checks and interpretation
 
-- Requires family/version/index metadata and an explicit attribute header.
+- Requires family/version metadata and an explicit attribute header. The source
+  owner confirmed that missing or blank index metadata and blank LOCATION are valid.
 - Checks the leading columns `NE_ID`, `SYSTEM_ID`, `NE_NAME`, `INIT_TIME`,
   `TIME_OFFSET`, `GRAN_PERIOD`, `LOCATION`. Underscore variants such as `NENAME`
   are recognized; exact original headers are retained locally.
@@ -50,7 +51,7 @@ but no data row values. Generated files have private permissions.
   offset together, without relying on the server's local timezone.
 - Checks that collection-period fields are positive integers. Their units are
   not inferred or converted yet.
-- Checks every data row's width, the presence of common values, and finite decimal
+- Checks every data row's width, common fields other than optional LOCATION, and finite decimal
   or scientific numeric representations after the seven common fields.
 - Empty counter fields are counted separately and never treated as zero.
   Nonnumeric or nonfinite values require review rather than silent coercion.
@@ -69,8 +70,11 @@ values, 187 rows with empty common fields and 28 files with missing/blank index
 metadata. No input has been loaded into ClickHouse. The updated summary identifies
 which common columns are empty, whether `#index` is absent or present but blank,
 and whether those files have only LOCATION missing. It also separates exact header
-layout count from family/version/header combinations. These diagnostics do not
-automatically accept missing metadata or infer a global measurement scope.
+layout count from family/version/header combinations. Those initial diagnostics
+did not automatically accept missing metadata or infer a global scope.
+The source owner subsequently confirmed those blanks are valid. The current
+validator accepts absent/blank index and blank LOCATION while preserving their
+diagnostics. It does not infer a global measurement scope.
 
 Replace the script and rerun the same command. Share only these short lines:
 `Distinct exact header layouts`, `Empty common fields`, `Index records`, and
