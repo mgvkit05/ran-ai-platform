@@ -65,16 +65,32 @@ class CounterToolsTests(unittest.TestCase):
         self.assertEqual(evidence['observations'][0]['entity'], 'entity-1')
         self.assertEqual(evidence['observations'][1]['entity'], 'entity-2')
         captured = []
-        def transport(request, timeout):
+        def transport(request):
             captured.append(request)
             return {'done': True, 'response': 'A bounded sample [R1].'}
-        with tempfile.TemporaryDirectory() as temporary, patch.object(tools, 'http_json', transport), contextlib.redirect_stdout(io.StringIO()):
+        with tempfile.TemporaryDirectory() as temporary, patch.object(tools, 'stream_explanation', transport), contextlib.redirect_stdout(io.StringIO()):
             tools.explain(Path(temporary), evidence)
         payload = json.loads(captured[0].data)
         self.assertEqual(captured[0].full_url, 'http://127.0.0.1:11435/api/generate')
         self.assertEqual(payload['keep_alive'], -1)
         self.assertIn('Do not execute tools or write SQL', payload['system'])
         self.assertNotIn('password', payload['prompt'])
+        self.assertTrue(payload['stream'])
+        self.assertEqual(payload['options']['num_ctx'], 2048)
+        self.assertEqual(payload['options']['num_predict'], 192)
+
+    def test_stream_reports_timings_without_printing_reasoning(self):
+        events = [{'thinking': 'PRIVATE_REASONING'}, {'response': 'Sample [R1].'},
+                  {'done': True, 'eval_count': 4, 'eval_duration': 1000000000, 'done_reason': 'stop'}]
+        class Opener:
+            def open(self, request, timeout):
+                return io.BytesIO(('\n'.join(json.dumps(event) for event in events) + '\n').encode())
+        output = io.StringIO()
+        with patch.object(tools.urllib.request, 'build_opener', return_value=Opener()), contextlib.redirect_stdout(output):
+            result = tools.stream_explanation(None)
+        self.assertEqual(result['response'], 'Sample [R1].')
+        self.assertNotIn('PRIVATE_REASONING', output.getvalue())
+        self.assertIn('Timings:', output.getvalue())
 
 
 if __name__ == '__main__':

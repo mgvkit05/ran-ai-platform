@@ -87,11 +87,20 @@ No observations means no AI call. Oversized evidence requires a smaller `--rows`
 selection instead of silent truncation.
 
 The explanation request uses the manager's recorded thread count, CPU inference,
-4,096-token context, low reasoning effort, a 768-generated-token ceiling and a
-10-minute timeout. It keeps the model resident. Changing from the earlier 2,048
-context may cause a one-time model reload; returning to the manager's `ask` with
-its smaller context may also reload. Existing memory ceilings remain inherited
-from the running Ollama instance. No service configuration is rewritten.
+the tested 2,048-token context, low reasoning effort and a 192-generated-token
+ceiling. Compact evidence and an at-most-60-word answer instruction reduce prompt
+and generation work. `streaming-v2` prints the answer as it arrives and a heartbeat
+every 10 seconds while waiting/loading/reasoning. Private reasoning text is not
+printed. Completion reports load, prompt and generation durations and token counts.
+The socket idle timeout is 60 seconds; total elapsed time is checked against 120
+seconds whenever a stream event arrives. This is not a hard wall-clock deadline.
+The model remains resident and inherited memory ceilings are unchanged.
+
+If an earlier explanation is stalled, interrupt that client with Ctrl+C. An older
+request can still occupy the single model slot: use the existing Ollama manager's
+`stop`, then `start`, to clear it before retrying. Replace only this tool script;
+there is no database reload. A RUNNING/loaded status confirms availability, not
+that generation is making progress. The new timings diagnose the bottleneck.
 
 ## Data access and verification
 
