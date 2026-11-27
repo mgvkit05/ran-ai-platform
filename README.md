@@ -1,5 +1,18 @@
 # RAN AI Platform
 
+## Excel counter specifications
+
+Transfer `scripts/counter_specs.py` and the updated `scripts/16_counter_tools.py`
+to `$HOME/ran-ai/app/`. Keep private `.xlsx` documents in
+`$HOME/ran-ai/knowledge/counter-spec/`, then run:
+
+```bash
+"$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/counter_specs.py" build
+```
+
+Counter explanations can then include exact documentation matches. See
+[setup, definition lookup and examples](docs/counter-specifications.md).
+
 Self-hosted 5G KPI analytics with local AI inference. The current deployment
 priority is connecting controlled counter queries to local AI explanations.
 

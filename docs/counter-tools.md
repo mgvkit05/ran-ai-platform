@@ -1,5 +1,9 @@
 # Controlled counter queries and local AI explanations
 
+To include definitions from local Excel workbooks, follow the
+[counter specification setup](counter-specifications.md). Search and explain
+then include a unique NE type/family/counter match automatically.
+
 ## Current diagnostic: explanation timed out before receiving output
 
 The next test is the [reversible CPU recovery profile](ollama-recovery.md), which

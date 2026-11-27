@@ -19,6 +19,21 @@ def observation(value, entity='PRIVATE_ENTITY'):
 
 
 class CounterToolsTests(unittest.TestCase):
+    def test_documentation_reaches_model_with_source_citation(self):
+        item = {'counter_label': 'Synthetic(count)', 'unit_label': 'count', 'family': 'Synthetic', 'version': '1'}
+        evidence = tools.evidence_for(item, [observation('14')])
+        evidence['definitions'] = [{'citation': 'D1', 'fields': {'Type Description': 'Number of attempts'},
+                                    'source': {'workbook': 'ACPF.xlsx', 'sheet': 'counter', 'row': 9}}]
+        captured = []
+        def transport(request):
+            captured.append(json.loads(request.data))
+            return {'done': True, 'response': 'Attempts [D1], sample 14 [R1].'}
+        with tempfile.TemporaryDirectory() as temporary, patch.object(tools, 'stream_explanation', transport), contextlib.redirect_stdout(io.StringIO()):
+            tools.explain(Path(temporary), evidence)
+        self.assertIn('Number of attempts', captured[0]['prompt'])
+        self.assertIn('[D1]', captured[0]['system'])
+        self.assertNotIn('PRIVATE_ENTITY', captured[0]['prompt'])
+
     def test_search_lists_and_saves_more_than_ten_matches_by_default(self):
         catalog = [{'counter_label': 'Air%d' % i, 'unit_label': 'count',
                     'source_files': 1, 'schema_id': 'a' * 64,
