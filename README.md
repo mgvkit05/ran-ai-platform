@@ -3,6 +3,19 @@
 Self-hosted 5G KPI analytics with local AI inference. The current deployment
 priority is connecting controlled counter queries to local AI explanations.
 
+## Current diagnostic: inspect Ollama after explanation timeout
+
+The database query succeeds, but the explanation received no model output before
+its timeout. Run on the AI server in SSH:
+
+```bash
+log=$(ls -t "$HOME"/ran-ai/logs/07-ollama-*.log | head -n 1)
+tail -n 40 "$log"
+```
+
+Capture relevant runner/loading/error lines before restarting or retrying.
+This is read-only. Review the log for private information before sharing.
+
 ## Current commands: counter search and AI explanation
 
 The sample viewer now works. Transfer `scripts/16_counter_tools.py` to

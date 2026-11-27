@@ -1,5 +1,19 @@
 # Controlled counter queries and local AI explanations
 
+## Current diagnostic: explanation timed out before receiving output
+
+Run these two lines in the AI server's SSH terminal, from any directory:
+
+```bash
+log=$(ls -t "$HOME"/ran-ai/logs/07-ollama-*.log | head -n 1)
+tail -n 40 "$log"
+```
+
+This reads the last 40 lines of the newest persistent Ollama log. Share the
+relevant runner/loading/memory/error/cancellation lines after reviewing them for
+private information. Do not restart or retry generation before capturing these
+diagnostics. No service or database changes are made.
+
 The database viewer has been confirmed working. This step connects read-only
 counter lookup and bounded source observations to the existing local GPT-OSS 20B
 instance. It does not grant the model SQL execution or database credentials.
