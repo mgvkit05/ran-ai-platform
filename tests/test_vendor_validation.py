@@ -44,6 +44,22 @@ class VendorValidationTests(unittest.TestCase):
         self.assertEqual(result['issues'], {})
         self.assertEqual(result['empty_counter_values'], 1)
 
+    def test_blank_index_and_location_are_diagnosed_without_relaxing_validation(self):
+        header = HEADER.replace('#index:Cell/Test', '#index:')
+        row = ROW.replace('Cell_TEST', '')
+        result = validator.validate_csv((header + row).encode())
+        self.assertEqual(result['index_record_status'], 'blank')
+        self.assertEqual(result['empty_common_fields'], {'LOCATION': 1})
+        self.assertEqual(result['issues']['missing_index'], 1)
+        report = {'csvs': [result], 'members': 1, 'unsafe_or_special_members': 0, 'non_csv_files': 0}
+        text, ready = validator.summary(report)
+        self.assertFalse(ready)
+        self.assertIn('LOCATION=1/1', text)
+        self.assertIn('nonempty=0 blank=1 absent=0', text)
+        self.assertIn('files where LOCATION is the only empty common field=1', text)
+        absent = validator.validate_csv((HEADER.replace('#index:Cell/Test\n', '') + ROW).encode())
+        self.assertEqual(absent['index_record_status'], 'absent')
+
     def test_archive_summary_is_short_and_private(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -56,7 +72,7 @@ class VendorValidationTests(unittest.TestCase):
             report = validator.validate_archive(path)
             text, ready = validator.summary(report)
             self.assertTrue(ready)
-            self.assertLess(len(text.splitlines()), 15)
+            self.assertLess(len(text.splitlines()), 20)
             for private in ('confidential_filename', 'Synthetic family', 'NE_TEST', 'metric_A', '2026-01-01'):
                 self.assertNotIn(private, text)
             self.assertEqual([item.name for item in root.iterdir()], ['test.tar'])

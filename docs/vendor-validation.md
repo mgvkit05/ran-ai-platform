@@ -29,7 +29,7 @@ Only Python's standard library is used; no downloads, sudo or dependency changes
 
 ## 3. Share the short result
 
-The summary is fewer than 15 lines irrespective of the schema count. Share the
+The summary is fewer than 20 lines irrespective of the schema count. Share the
 whole terminal summary. It reports CSV count, family/version/header-combination
 count, fully checked row count, structural issues, numeric/empty counter-field
 counts and collection-period integers. No filenames, actual headers, source
@@ -63,6 +63,19 @@ but no data row values. Generated files have private permissions.
 `STRUCTURAL VALIDATION: PASS` is a format check, not proof of correct counter
 semantics or data completeness. If the result says REVIEW REQUIRED, share the
 issue counts; do not change data or force a database load.
+
+The first real validation reported 838 CSVs, 273,853 rows, 3,520,845 numeric counter
+values, 187 rows with empty common fields and 28 files with missing/blank index
+metadata. No input has been loaded into ClickHouse. The updated summary identifies
+which common columns are empty, whether `#index` is absent or present but blank,
+and whether those files have only LOCATION missing. It also separates exact header
+layout count from family/version/header combinations. These diagnostics do not
+automatically accept missing metadata or infer a global measurement scope.
+
+Replace the script and rerun the same command. Share only these short lines:
+`Distinct exact header layouts`, `Empty common fields`, `Index records`, and
+`Blank/absent-index files`, plus `Issue counts` if they change. There is no need
+to send filenames or row values.
 
 ## After review
 

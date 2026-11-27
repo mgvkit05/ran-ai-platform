@@ -42,9 +42,11 @@ def validate_time(value, offset):
 
 def validate_csv(content):
     result = {'metadata': {}, 'headers': [], 'rows': 0, 'invalid_rows': 0,
-              'numeric_values': 0, 'empty_counter_values': 0, 'periods_raw': {}, 'issues': {}}
+              'numeric_values': 0, 'empty_counter_values': 0, 'periods_raw': {}, 'issues': {},
+              'empty_common_fields': {}, 'index_record_status': 'absent'}
     issues = Counter()
     periods = Counter()
+    empty_fields = Counter()
     try:
         text = content.decode('utf-8-sig')
     except UnicodeDecodeError:
@@ -82,6 +84,8 @@ def validate_csv(content):
                     if key in result['metadata']:
                         issues['duplicate_metadata_key'] += 1
                     result['metadata'][key] = ','.join([value] + row[1:]).strip()
+                    if key == 'index':
+                        result['index_record_status'] = 'nonempty' if result['metadata'][key] else 'blank'
                 else:
                     issues['unrecognized_metadata_key'] += 1
                 continue
@@ -97,7 +101,9 @@ def validate_csv(content):
                 result['invalid_rows'] += 1
                 continue
             invalid = False
-            if any(not value.strip() for value in row[:7]):
+            missing_fields = [COMMON[index] for index, value in enumerate(row[:7]) if not value.strip()]
+            if missing_fields:
+                empty_fields.update(missing_fields)
                 issues['empty_common_field'] += 1
                 invalid = True
             if not validate_time(row[3].strip(), row[4].strip()):
@@ -135,6 +141,7 @@ def validate_csv(content):
         if not result['metadata'].get(key):
             issues['missing_' + key] += 1
     result['periods_raw'] = dict(periods)
+    result['empty_common_fields'] = dict(empty_fields)
     result['issues'] = dict(issues)
     return result
 
@@ -188,12 +195,27 @@ def summary(report):
     issues = Counter()
     periods = Counter()
     schemas = set()
+    headers = set()
+    index_status = Counter()
+    empty_fields = Counter()
+    empty_field_files = Counter()
+    missing_index_rows = 0
+    only_location_missing = 0
     for item in files:
         issues.update(item['issues'])
         periods.update(item['periods_raw'])
         schemas.add((item['metadata'].get('family'), item['metadata'].get('version'), tuple(item['headers'])))
+        headers.add(tuple(item['headers']))
+        index_status[item.get('index_record_status', 'unknown')] += 1
+        empty_fields.update(item.get('empty_common_fields', {}))
+        empty_field_files.update(item.get('empty_common_fields', {}).keys())
+        if item.get('index_record_status') in ('absent', 'blank'):
+            missing_index_rows += item['rows']
+            if set(item.get('empty_common_fields', {})) == {'LOCATION'}:
+                only_location_missing += 1
     lines = ['=== Full-row TAR validation (no filenames, headers or row values) ===',
              'CSV files: %d; candidate family/version/header combinations: %d' % (len(files), len(schemas)),
+             'Distinct exact header layouts: %d' % len(headers),
              'Files without validation issues: %d; files with issues: %d' %
              (sum(not item['issues'] for item in files), sum(bool(item['issues']) for item in files)),
              'Data rows: %d; invalid rows: %d' % (sum(item['rows'] for item in files), sum(item['invalid_rows'] for item in files)),
@@ -202,6 +224,9 @@ def summary(report):
              'Collection-period fields (raw integers, unit not assumed): ' + ', '.join(sorted(periods, key=int)),
              'Unsafe/special members skipped: %d; non-CSV files: %d' % (report['unsafe_or_special_members'], report['non_csv_files'])]
     lines.append('Issue counts: ' + (', '.join('%s=%d' % pair for pair in sorted(issues.items())) or 'none'))
+    lines.append('Empty common fields (rows/files): ' + (', '.join('%s=%d/%d' % (name, empty_fields[name], empty_field_files[name]) for name in COMMON if empty_fields[name]) or 'none'))
+    lines.append('Index records (files): nonempty=%d blank=%d absent=%d' % (index_status['nonempty'], index_status['blank'], index_status['absent']))
+    lines.append('Blank/absent-index files: rows=%d; files where LOCATION is the only empty common field=%d' % (missing_index_rows, only_location_missing))
     ready = bool(files) and not issues and not report['unsafe_or_special_members']
     lines.append('STRUCTURAL VALIDATION: ' + ('PASS' if ready else 'REVIEW REQUIRED'))
     lines.append('Identifiers remain strings; timestamps plus offsets were checked. Period units and counter semantics still need confirmation.')
