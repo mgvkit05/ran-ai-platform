@@ -32,6 +32,22 @@ def workbook(path):
 
 
 class CounterSpecsTests(unittest.TestCase):
+    def test_single_cell_merge_reference_preserves_counter_definitions(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'ACPF.xlsx'
+            workbook(path)
+            expected = specs.workbook_records(path)
+            with zipfile.ZipFile(path) as archive:
+                members = {name: archive.read(name) for name in archive.namelist()}
+            sheet = 'xl/worksheets/sheet1.xml'
+            members[sheet] = members[sheet].replace(b'</mergeCells>', b'<mergeCell ref="C3"/></mergeCells>')
+            with zipfile.ZipFile(path, 'w') as archive:
+                for name, content in members.items():
+                    archive.writestr(name, content)
+            actual = specs.workbook_records(path)
+            self.assertEqual([r['fields'] for r in actual], [r['fields'] for r in expected])
+            self.assertEqual([r['source']['row'] for r in actual], [3, 4])
+
     def test_shared_strings_rich_text_and_formula_text(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / 'ACPF.xlsx'

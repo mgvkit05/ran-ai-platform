@@ -69,7 +69,16 @@ def read_counter_sheet(path):
             cells[position] = '=' + formula if formula is not None else value
         # Only explicit Excel merges propagate values. Ordinary blanks remain blank.
         for merge in xml.findall('s:mergeCells/s:mergeCell', NS):
-            start, end = (coordinate(x) for x in merge.attrib['ref'].split(':'))
+            reference = merge.attrib.get('ref', '').strip()
+            parts = reference.split(':')
+            if len(parts) == 1:
+                start = end = coordinate(parts[0])
+            elif len(parts) == 2:
+                start, end = (coordinate(x) for x in parts)
+            else:
+                raise ValueError('%s: unsupported merge reference %r' % (path.name, reference))
+            if end[0] < start[0] or end[1] < start[1]:
+                raise ValueError('%s: reversed merge reference %r' % (path.name, reference))
             if (end[0] - start[0] + 1) * (end[1] - start[1] + 1) > 1000000:
                 raise ValueError('Worksheet merge too large')
             value = cells.get(start, '')
