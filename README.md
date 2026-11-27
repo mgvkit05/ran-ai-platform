@@ -1,9 +1,26 @@
 # RAN AI Platform
 
 Self-hosted 5G KPI analytics with local AI inference. The current deployment
-priority is viewing the successfully loaded data before adding analytical tools.
+priority is connecting controlled counter queries to local AI explanations.
 
-## Current command: view sample records locally
+## Current commands: counter search and AI explanation
+
+The sample viewer now works. Transfer `scripts/16_counter_tools.py` to
+`$HOME/ran-ai/app/`, then run in SSH:
+
+```bash
+"$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/16_counter_tools.py" inventory
+"$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/16_counter_tools.py" search "throughput"
+"$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/16_counter_tools.py" samples --pick 1
+"$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/16_counter_tools.py" explain --pick 1
+```
+
+Choose a numbered search result before requesting samples/explanation. Fixed,
+parameterized read-only queries retrieve bounded observations; GPT-OSS explains
+those observations without SQL access. Keep real output local. See
+[counter-tool instructions and limits](docs/counter-tools.md).
+
+## Completed step: view sample records locally
 
 The first archive loaded successfully: 838 CSVs, 273,853 rows, 3,520,845 counter
 fields, including all 187 blank locations. A rerun confirmed archive deduplication.
