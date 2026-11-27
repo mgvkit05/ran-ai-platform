@@ -5,6 +5,20 @@ priority is connecting controlled counter queries to local AI explanations.
 
 ## Current diagnostic: inspect Ollama after explanation timeout
 
+The previously working manager's minimal question also stalls. Transfer
+`scripts/17_diagnose_ollama.py` to `$HOME/ran-ai/app/`. While the stalled question
+is still pending, run in a **second SSH session**:
+
+```bash
+"$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/17_diagnose_ollama.py"
+```
+
+It samples the managed runtime's CPU, memory and process/thread state for three
+seconds and reports fixed loading-event labels. No model requests, restarts,
+signals or settings changes occur. Share this short diagnostic output.
+
+### Previous log capture command
+
 The database query succeeds, but the explanation received no model output before
 its timeout. Run on the AI server in SSH:
 

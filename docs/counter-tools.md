@@ -2,6 +2,30 @@
 
 ## Current diagnostic: explanation timed out before receiving output
 
+The server log shows model warm-up followed by client disconnection and canceled
+loading. A minimal question through the previously working manager also stalls,
+so this is not isolated to the database explanation prompt. The cause of the
+slow/stalled runtime is not yet established; a loaded-model listing alone does
+not prove the runner is ready to generate.
+
+Transfer `scripts/17_diagnose_ollama.py` to `$HOME/ran-ai/app/`, then run in a
+second SSH session while the stalled question is pending:
+
+```bash
+"$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/17_diagnose_ollama.py"
+```
+
+The read-only diagnostic reports runtime CPU/memory/affinity, thread states,
+major page-fault deltas, local API responses and fixed labels for recent loading
+events. It writes no files, submits no generation request and makes no changes.
+It also includes same-user processes from the installed runtime directory, which
+can reveal older workers outside the current manager's descendant/group tree.
+Run it before a further restart, capture the output, and then the waiting client
+can be interrupted. Do not infer a CPU or memory bottleneck solely from process
+state letters; interpret utilization, faults and available memory together.
+
+### Previous log capture
+
 Run these two lines in the AI server's SSH terminal, from any directory:
 
 ```bash
