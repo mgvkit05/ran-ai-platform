@@ -1,9 +1,22 @@
 # RAN AI Platform
 
 Self-hosted 5G KPI analytics with local AI inference. The current deployment
-priority is full-row source validation before database ingestion.
+priority is reviewing the source's valid blank-index/location records before ingestion.
 
-## Current command: validate the vendor TAR format
+## Current command: identify blank-index/location CSVs
+
+The user confirmed all source data must be preserved. Ingestion is paused while
+the user explains the 28 files with blank index and LOCATION fields. Transfer
+`scripts/13_list_blank_location_files.py` to `$HOME/ran-ai/app/`, then run:
+
+```bash
+"$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/13_list_blank_location_files.py"
+```
+
+It lists the first five affected filenames from the existing private report,
+without row values. See [file identification instructions](docs/blank-location-review.md).
+
+## Completed diagnostic: validate the vendor TAR format
 
 The sample contains 838 CSVs with 297 candidate schemas. The first four records
 define family, version, index and attribute headers. Transfer
