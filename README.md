@@ -10,7 +10,10 @@ is never backfilled. Source-specific hash paths
 prevent collisions when every server uses the same TAR filename.
 After verified delivery, intermediate cached TARs are deleted and audited in
 `spool/logs/deletions.jsonl`. The collector does not query ClickHouse or wait for
-ingestion; the AI server processes its retained copies independently.
+ingestion. The AI server processes received copies independently, then deletes
+its inbox TARs after verifying their ClickHouse commits. AI deletion history is
+recorded in `$HOME/ran-ai/logs/ingest-deletions.jsonl`. Update both script copies
+to `tar-transfer-v8`, intermediate first; existing schedules continue working.
 Each producer can now have its own `user` and `password` in the intermediate
 server's private `config.json` (mode 600); key authentication remains optional.
 Update script 18 on both servers, then enable automatic collection and AI

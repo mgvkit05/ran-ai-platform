@@ -16,6 +16,8 @@ Watch confirmed intermediate cache deletions:
   tail -F "$HOME/ran-ai-transfer/spool/logs/deletions.jsonl"
 Watch ClickHouse ingestion on the AI server:
   tail -F "$HOME/ran-ai/logs/scheduled-ingest.log"
+Watch AI archive deletion after committed ingestion:
+  tail -F "$HOME/ran-ai/logs/ingest-deletions.jsonl"
 Recent downloaded TARs and successful push manifests (intermediate server):
   ls -lt "$HOME"/ran-ai-transfer/spool/cache/*/*.tar | head
   ls -lt "$HOME"/ran-ai-transfer/spool/sent/*.json | head
@@ -66,7 +68,7 @@ SUFFIXES = ('.tar', '.tgz', '.tar.gz', '.tar.bz2', '.tar.xz')
 ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}')
 HASH = re.compile(r'[a-f0-9]{64}')
 PROVENANCE = 'ran_ai.archive_sources_v1'
-VERSION = 'tar-transfer-v7'
+VERSION = 'tar-transfer-v8'
 
 
 def report_failure(error, stage):
@@ -200,7 +202,9 @@ elif mode in ('put','publish'):
                 h.update(b);f.write(b)
             f.flush();os.fsync(f.fileno())
         if size!=q['size'] or h.hexdigest()!=digest: raise ValueError('copy_checksum_mismatch')
-        if final.exists() and checksum(final)==digest:
+        if (batch/'.ingested').is_file() and not (batch/'.ingested').is_symlink():
+            temporary.unlink()  # Identical delivery retry after ingestion/cleanup.
+        elif final.exists() and checksum(final)==digest:
             temporary.unlink()
         elif (batch/'.ready').exists():
             raise ValueError('published_archive_changed')
@@ -210,6 +214,13 @@ elif mode in ('put','publish'):
     else:
         manifest=q['manifest']
         if manifest['batch_id']!=q['batch_id']: raise ValueError('batch_mismatch')
+        content=json.dumps(manifest,sort_keys=True,separators=(',',':')).encode()
+        manifest_path=batch/'manifest.json';ready=batch/'.ready';ingested=batch/'.ingested'
+        if any(p.is_symlink() for p in (manifest_path,ready,ingested)): raise ValueError('manifest_symlink')
+        if ingested.is_file() and ready.is_file() and manifest_path.is_file():
+            if manifest_path.read_bytes()!=content or ready.read_text().strip()!=hashlib.sha256(content).hexdigest():
+                raise ValueError('published_batch_changed')
+            print('OK');sys.exit(0)  # Prior verified delivery was already ingested.
         expected=set(manifest['sources']);received=set()
         if not expected or not manifest['archives']: raise ValueError('empty_batch')
         for item in manifest['archives']:
@@ -518,10 +529,10 @@ def push_batch(config, spool, batch):
         raise RuntimeError('AI_delivery_confirmation_not_received')
 
 
-def deletion_event(spool, event):
+def deletion_event(spool, event, audit_name='deletions.jsonl'):
     directory = spool / 'logs'
     directory.mkdir(parents=True, exist_ok=True)
-    path = directory / 'deletions.jsonl'
+    path = directory / audit_name
     if path.is_symlink():
         raise ValueError('deletion_audit_symlink')
     with path.open('a', encoding='utf-8') as output:
@@ -632,6 +643,56 @@ def transfer(config, spool, log):
     return int(failed)
 
 
+def verify_batch_commits(batch, db):
+    for archive_hash in sorted({item['sha256'] for item in batch['archives']}):
+        if not int(db.execute("SELECT count() FROM ran_ai.ingest_commits_v1 WHERE archive_sha256='%s'" % archive_hash)):
+            raise ValueError('archive_not_committed_cleanup_refused')
+
+
+def cleanup_ingested_batch(folder, batch, inbox, root, db, log):
+    validate_manifest(batch)
+    folder.resolve().relative_to(inbox.resolve())
+    if folder.is_symlink() or not (folder / '.ingested').is_file() or (folder / '.ingested').is_symlink():
+        raise ValueError('ingested_marker_required_for_cleanup')
+    verify_batch_commits(batch, db)  # AI-side only; collector never queries ClickHouse.
+    deleted, failures = 0, 0
+    seen = set()
+    for item in batch['archives']:
+        key = (item['source_id'], item['sha256'])
+        if key in seen:
+            continue
+        seen.add(key)
+        path = folder / item['source_id'] / (item['sha256'] + '.tar')
+        event = dict(batch_id=batch['batch_id'], source_id=item['source_id'], sha256=item['sha256'],
+                     archive_file=str(path.absolute()), original_file=item['source_path'], bytes=item['size'],
+                     reason='clickhouse_commit_verified')
+        try:
+            if path.parent.is_symlink() or path.is_symlink():
+                raise ValueError('AI_archive_cleanup_symlink')
+            path.resolve().relative_to(folder.resolve())
+            if not path.exists():
+                deletion_event(root, dict(event, result='already_absent'), 'ingest-deletions.jsonl')
+                continue
+            if not stat.S_ISREG(path.lstat().st_mode) or path.stat().st_size != item['size'] or digest(path) != item['sha256']:
+                raise ValueError('AI_archive_cleanup_content_changed')
+            deletion_event(root, dict(event, result='delete_intent'), 'ingest-deletions.jsonl')
+            path.unlink()
+            deletion_event(root, dict(event, result='deleted'), 'ingest-deletions.jsonl')
+            deleted += 1
+            print('DELETED AI TAR after ClickHouse commit: source=%s; file=%s; bytes=%d' %
+                  (item['source_id'], path.name, item['size']), flush=True)
+        except Exception:
+            failures += 1
+            traceback.print_exc(file=log)
+            log.flush()
+            deletion_event(root, dict(event, result='delete_failed'), 'ingest-deletions.jsonl')
+            print('AI archive cleanup will retry for source %s; committed data is unchanged.' % item['source_id'], flush=True)
+    if not failures:
+        save_json(folder / '.cleaned', dict(completed_utc=datetime.now(timezone.utc).isoformat(),
+                                           manifest_sha256=digest(folder / 'manifest.json')))
+    return deleted, failures
+
+
 def ingest_batches(inbox, root, log, loader=None):
     inbox.resolve().relative_to((root / 'data/landing').resolve())
     if loader is None:
@@ -641,11 +702,9 @@ def ingest_batches(inbox, root, log, loader=None):
         spec.loader.exec_module(loader)
     credentials = json.loads((root / 'config/clickhouse-server/credentials.json').read_text())
     db = loader.Database(credentials)
-    totals = dict(batches=0, archives=0, already_loaded=0, rows=0, failures=0)
+    totals = dict(batches=0, archives=0, already_loaded=0, rows=0, failures=0, deleted_archives=0, cleanup_failures=0)
     for ready in sorted(inbox.glob('*/.ready')):
         folder = ready.parent
-        if (folder / '.ingested').exists():
-            continue
         try:
             if folder.is_symlink() or ready.is_symlink() or (folder / 'manifest.json').is_symlink():
                 raise ValueError('batch_symlink')
@@ -656,6 +715,22 @@ def ingest_batches(inbox, root, log, loader=None):
             validate_manifest(batch)
             if folder.name != batch['batch_id']:
                 raise ValueError('batch_directory_mismatch')
+            if (folder / '.cleaned').is_symlink() or (folder / '.ingested').is_symlink():
+                raise ValueError('batch_marker_symlink')
+            if (folder / '.cleaned').exists():
+                cleaned = json.loads((folder / '.cleaned').read_text())
+                if cleaned['manifest_sha256'] != hashlib.sha256(content).hexdigest():
+                    raise ValueError('cleaned_manifest_changed')
+                if not (folder / '.ingested').exists():
+                    verify_batch_commits(batch, db)
+                    save_json(folder / '.ingested', dict(completed_utc=datetime.now(timezone.utc).isoformat(), recovered=True))
+                continue
+            if (folder / '.ingested').exists():
+                deleted, failures = cleanup_ingested_batch(folder, batch, inbox, root, db, log)
+                totals['deleted_archives'] += deleted
+                totals['cleanup_failures'] += failures
+                totals['failures'] += int(bool(failures))
+                continue
             # Verify the complete batch before starting any archive ingestion.
             for item in batch['archives']:
                 path = folder / item['source_id'] / (item['sha256'] + '.tar')
@@ -686,6 +761,10 @@ def ingest_batches(inbox, root, log, loader=None):
                 totals['rows'] += result['rows']
             save_json(folder / '.ingested', dict(completed_utc=datetime.now(timezone.utc).isoformat()))
             totals['batches'] += 1
+            deleted, failures = cleanup_ingested_batch(folder, batch, inbox, root, db, log)
+            totals['deleted_archives'] += deleted
+            totals['cleanup_failures'] += failures
+            totals['failures'] += int(bool(failures))
         except Exception:
             traceback.print_exc(file=log)
             log.flush()

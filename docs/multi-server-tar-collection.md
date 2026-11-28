@@ -1,9 +1,11 @@
 # Multi-server TAR collection through an intermediate server
 
-Version `tar-transfer-v7` pushes available producers without an all-host barrier
-and automatically deletes intermediate TARs after verified AI delivery. Updating
-the intermediate script applies this policy to existing schedules/configuration;
-no ClickHouse query or ingestion acknowledgement is required for cleanup.
+Version `tar-transfer-v8` pushes available producers without an all-host barrier
+and deletes intermediate TARs after verified AI delivery. The AI server separately
+deletes its received TARs after confirmed ClickHouse ingestion. The collector never
+queries ClickHouse. Existing configuration and schedules require no changes.
+Update the intermediate script first, then the AI copy, for retry compatibility
+when a batch has already been ingested and cleaned on the AI server.
 
 Deployment:
 
@@ -35,8 +37,8 @@ $HOME/ran-ai-transfer/spool/cache/SOURCE_ID/ARCHIVE_SHA256.tar
 Each original host gets a unique, permanent source ID. Two hosts producing
 `same-name.tar` use different directories. A host later replacing that filename
 with new contents gets a different SHA256 filename. Copies are retained until
-verified delivery, then intermediate TARs are deleted. AI copies and origin
-metadata remain available.
+verified delivery, then intermediate TARs are deleted. AI copies are retained
+until successful ingestion, then also deleted. Origin metadata remains available.
 The manifest preserves original host, username, original path/filename, size,
 mtime and SHA256. Compressed TARs are also supported; the hash filename ends in
 `.tar` and the existing loader detects compression from contents.
@@ -210,7 +212,7 @@ python3 "$HOME/ran-ai-transfer/18_transfer_tar_batches.py" run
 ```
 
 `plan` lists counts after checking sources; it downloads and pushes nothing.
-Version `tar-transfer-v7` prints a version banner and safe diagnostic codes on
+Version `tar-transfer-v8` prints a version banner and safe diagnostic codes on
 failure. `CONFIG_JSON` includes the exact line and column in the local config;
 `CONFIG_PERMISSIONS`, `SSH_HOST_KEY`, `SSH_AUTH`, `SSH_CONNECTION`, and
 `REMOTE_PYTHON` distinguish common setup failures without exposing credentials.
@@ -249,7 +251,15 @@ On the AI server, ingest complete batches:
 The command verifies the complete batch before ingesting any TAR, then calls the
 existing loader for each archive. Blank/absent index and blank location remain
 valid. Existing raw-value preservation and CSV/archive limits remain in force.
-After all archives succeed it writes `.ingested`. Source TARs remain in the inbox.
+After all archives succeed it writes `.ingested`, verifies each archive hash in
+the ClickHouse commit ledger on the AI server, and deletes the manifest-listed
+TARs. It writes `.cleaned` after cleanup completes. Small batch manifests/markers
+remain. No directory-wide wildcard deletion is used.
+
+Previously ingested batches are also cleaned on the next scheduled AI run.
+Deletion failures are retried without loading committed rows again. Failed or
+incomplete ingestion retains its archives. AI-side commit verification and
+deletion run on the AI server; the intermediate collector does not query it.
 
 The ClickHouse publication unit is one archive, not a transaction over the entire
 batch. If an archive fails after earlier ones commit, those completed archives
@@ -398,10 +408,29 @@ that directory for the intermediate spool paths above.
 details private. One archive may have multiple origins, so a direct join can
 multiply rows. Do not sum measurements after a many-origin join.
 
-Producer originals and AI inbox copies remain retained. Intermediate cached TARs
-are deleted after the AI receiver confirms complete, checksum-verified delivery.
-The collector does not query ClickHouse or wait for ingestion. The AI's scheduled
-ingester operates independently on the retained AI copies.
+Producer originals remain retained. Intermediate cached TARs are deleted after
+checksum-verified AI delivery. AI inbox TARs are deleted after confirmed committed
+ingestion. The collector does not query ClickHouse or wait for ingestion; the AI
+ingester verifies its local database before removing its received archives.
+
+Follow AI-side deletion records:
+
+```bash
+tail -F "$HOME/ran-ai/logs/ingest-deletions.jsonl"
+```
+
+The audit includes source, original filename, AI archive path, hash, byte size,
+batch ID, UTC timestamp and deletion result. `DELETED AI TAR after ClickHouse
+commit` also appears in the scheduled ingestion console log. The batch summary
+includes `deleted_archives` and `cleanup_failures`; an old batch may show zero
+new ingestions but a positive cleanup count.
+
+Only registered `SOURCE_ID/SHA256.tar` files are removed. The pipeline uses TARs,
+not ZIP ingestion; unrelated `.zip` files are not deleted. `.ready` records prior
+verified receipt, `.ingested` records successful ingestion, and `.cleaned` records
+completed AI cleanup. These markers and manifests remain after archive deletion.
+Duplicate delivery retries for an already ingested batch are acknowledged safely
+without reloading its data or restoring cleaned TARs.
 
 Follow deletion audit records on the intermediate server:
 
