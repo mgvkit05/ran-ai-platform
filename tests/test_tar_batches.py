@@ -3,6 +3,7 @@ import ast
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -66,6 +67,60 @@ def loader_for(db):
 
 
 class TarBatchTests(unittest.TestCase):
+    def test_only_latest_tar_is_collected_then_waits_without_falling_back(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config, spool, _, _ = setup(Path(temporary))
+            source = config['sources'][0]
+            directory = Path(source['directory'])
+            for number in (1, 2, 3):
+                path = directory / ('period%d.tar' % number)
+                make_archive(path, rows=number)
+                os.utime(path, ns=(1000000000 * number, 1000000000 * number))
+            with patch.object(bridge, 'ssh_call', local_remote):
+                self.assertEqual(bridge.collect_source(source, spool, 30), 1)
+                records = [json.loads(p.read_text()) for p in spool.glob('records/*.json')]
+                self.assertEqual(len(records), 1)
+                self.assertTrue(records[0]['source_path'].endswith('period3.tar'))
+                self.assertEqual(bridge.collect_source(source, spool, 30), 0)
+                (directory / 'period3.tar').unlink()
+                self.assertEqual(bridge.collect_source(source, spool, 30), 0)
+                fresh = directory / 'period4.tar'
+                make_archive(fresh, rows=4)
+                os.utime(fresh, ns=(4000000000, 4000000000))
+                self.assertEqual(bridge.collect_source(source, spool, 30), 1)
+            self.assertEqual(len(list(spool.glob('cache/source-1/*.tar'))), 2)
+
+    def test_failed_download_does_not_advance_latest_cursor(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config, spool, _, _ = setup(Path(temporary))
+            source = config['sources'][0]
+            make_archive(Path(source['directory']) / 'newest.tar')
+            def failed(target, request, timeout, **kwargs):
+                if request['operation'] == 'fetch':
+                    raise RuntimeError('interrupted download')
+                return local_remote(target, request, timeout, **kwargs)
+            with patch.object(bridge, 'ssh_call', failed):
+                with self.assertRaises(RuntimeError):
+                    bridge.collect_source(source, spool, 30)
+            self.assertFalse((spool / 'cursors/source-1.json').exists())
+            with patch.object(bridge, 'ssh_call', local_remote):
+                self.assertEqual(bridge.collect_source(source, spool, 30), 1)
+
+    def test_newest_selection_hashes_only_selected_archive(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            for number in (1, 2):
+                path = directory / ('file%d.tar' % number)
+                path.write_bytes(b'fixture')
+                os.utime(path, ns=(number * 1000000000, number * 1000000000))
+            program = bridge.REMOTE.replace('def checksum(p):',
+                "def checksum(p):\n    if p.name!='file2.tar': raise AssertionError('old archive hashed')")
+            request = dict(operation='list', directory=str(directory), patterns=['*.tar'], min_age_seconds=0, max_archive_bytes=1000)
+            result = subprocess.run([sys.executable, '-c', program], input=json.dumps(request).encode() + b'\n',
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr.decode(errors='replace'))
+            self.assertEqual([r['name'] for r in json.loads(result.stdout)], ['file2.tar'])
+
     def test_plan_only_lists_metadata_and_never_hashes_archive_contents(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary)

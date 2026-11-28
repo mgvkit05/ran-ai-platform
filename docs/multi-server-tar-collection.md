@@ -161,8 +161,24 @@ the next scan. Default maturity is 120 seconds; files must also have unchanged
 size/mtime/inode and a consistent checksum during collection. A size-limit breach
 stops that source for review, rather than silently dropping an archive.
 
-The first run collects **all eligible matching history** in each directory.
-Use a suitable source folder/pattern when you want a narrower initial backfill.
+The first run collects **only the newest eligible matching TAR per producer**.
+Older pre-existing TARs are ignored. Newest is determined by filesystem
+modification time, with filename as a deterministic tie-breaker, not by parsing
+the filename or CSV timestamps. Files still younger than `min_age_seconds` wait.
+
+After a verified download and saved origin record, a per-source cursor is stored
+under the intermediate spool's `cursors/`. Subsequent runs select only the newest
+eligible TAR newer than that cursor; unchanged/older files are not hashed or
+downloaded. Deleting the newest producer file does not cause a fallback to an
+older one. Interrupted downloads do not advance the cursor and can be retried.
+Do not delete cursors to resolve connection problems.
+
+Each poll selects at most one TAR per producer. If several eligible files arrive
+between polls, only the newest is selected; this is newest-only monitoring, not
+historical backfill or an every-period catch-up queue. Source timestamps should
+advance normally. Already collected pending files and prepared batches are retained
+on upgrade; this change does not erase or silently discard the existing queue.
+Existing JSON configuration requires no new settings.
 
 ## 2. Prepare the AI server
 
@@ -187,7 +203,7 @@ python3 "$HOME/ran-ai-transfer/18_transfer_tar_batches.py" run
 ```
 
 `plan` lists counts after checking sources; it downloads and pushes nothing.
-Version `tar-transfer-v4` prints a version banner and safe diagnostic codes on
+Version `tar-transfer-v5` prints a version banner and safe diagnostic codes on
 failure. `CONFIG_JSON` includes the exact line and column in the local config;
 `CONFIG_PERMISSIONS`, `SSH_HOST_KEY`, `SSH_AUTH`, `SSH_CONNECTION`, and
 `REMOTE_PYTHON` distinguish common setup failures without exposing credentials.
@@ -198,7 +214,7 @@ SSH operations print elapsed-time status every 15 seconds while waiting, so a
 slow connection/directory listing is visible. A heartbeat indicates waiting,
 not proof that authentication or transfer has completed. The configured timeout
 still applies (default 1800 seconds per SSH operation).
-`run` downloads new content to private `.part` files, verifies size/SHA256, then
+`run` downloads the newest selected content to private `.part` files, verifies size/SHA256, then
 publishes local cache files. Existing cached content is verified and reused.
 
 A new batch waits until there is at least one not-yet-delivered archive origin

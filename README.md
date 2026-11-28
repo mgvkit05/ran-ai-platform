@@ -4,7 +4,9 @@
 
 `scripts/18_transfer_tar_batches.py` collects on the RHEL intermediate server,
 waits for new archives from every configured producer, and pushes verified batches
-to the AI server for the existing ClickHouse loader. Source-specific hash paths
+to the AI server for the existing ClickHouse loader. Collection starts with only
+the newest eligible TAR per producer and remembers its position so older history
+is never backfilled. Source-specific hash paths
 prevent collisions when every server uses the same TAR filename.
 Each producer can now have its own `user` and `password` in the intermediate
 server's private `config.json` (mode 600); key authentication remains optional.

@@ -16,6 +16,8 @@ Each endpoint accepts user/password or an optional identity_file. Passwords stay
 in the private local config (chmod 600), never in manifests or command arguments.
 Preverified known_hosts are required for both authentication methods.
 Original source archives are never deleted. No model or new Python package needed.
+Collection selects only the newest eligible TAR per producer (mtime, then filename
+for ties). Per-source cursors prevent historical backfill after the initial pull.
 """
 import argparse
 import contextlib
@@ -42,7 +44,7 @@ SUFFIXES = ('.tar', '.tgz', '.tar.gz', '.tar.bz2', '.tar.xz')
 ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}')
 HASH = re.compile(r'[a-f0-9]{64}')
 PROVENANCE = 'ran_ai.archive_sources_v1'
-VERSION = 'tar-transfer-v4'
+VERSION = 'tar-transfer-v5'
 
 
 def report_failure(error, stage):
@@ -100,12 +102,19 @@ if mode in ('list','plan','fetch'):
     root=pathlib.Path(q['directory']).resolve(strict=True)
     if mode in ('list','plan'):
         result=[]
-        for p in sorted(root.iterdir()):
+        newest=None
+        after=q.get('after')
+        for p in root.iterdir():
             if p.is_symlink() or not p.is_file(): continue
             if not p.name.lower().endswith(('.tar','.tgz','.tar.gz','.tar.bz2','.tar.xz')): continue
             if not any(fnmatch.fnmatchcase(p.name,pattern) for pattern in q['patterns']): continue
             before=snapshot(p)
             if int(time.time()*1000000000)-before[1]<q['min_age_seconds']*1000000000: continue
+            key=(before[1],p.name)
+            if after is not None and key<=(after['mtime_ns'],after['name']): continue
+            if newest is None or key>newest[0]: newest=(key,p,before)
+        if newest is not None:
+            key,p,before=newest
             if before[0]>q['max_archive_bytes']: raise ValueError('archive_size_limit')
             digest=checksum(p) if mode=='list' else None
             if snapshot(p)!=before: raise ValueError('source_changed_during_scan')
@@ -351,10 +360,26 @@ def validate_file(item):
         raise ValueError('invalid_source_file_metadata')
 
 
+def inventory_request(source, spool, operation):
+    scope = {key: source[key] for key in ('host', 'user', 'directory')}
+    scope['patterns'] = source.get('patterns', ['*.tar'])
+    scope_hash = hashlib.sha256(json.dumps(scope, sort_keys=True).encode()).hexdigest()
+    request = dict(operation=operation, patterns=scope['patterns'],
+                   min_age_seconds=source.get('min_age_seconds', 120),
+                   max_archive_bytes=source.get('max_archive_bytes', 10737418240))
+    cursor_path = spool / 'cursors' / (source['id'] + '.json')
+    if cursor_path.exists():
+        cursor = json.loads(cursor_path.read_text())
+        if cursor['scope_hash'] == scope_hash:
+            request['after'] = dict(mtime_ns=cursor['mtime_ns'], name=cursor['name'])
+    return request, cursor_path, scope_hash
+
+
 def collect_source(source, spool, timeout):
-    items = json.loads(ssh_call(source, {'operation': 'list', 'patterns': source.get('patterns', ['*.tar']),
-                          'min_age_seconds': source.get('min_age_seconds', 120),
-                          'max_archive_bytes': source.get('max_archive_bytes', 10737418240)}, timeout))
+    request, cursor_path, scope_hash = inventory_request(source, spool, 'list')
+    items = json.loads(ssh_call(source, request, timeout))
+    if len(items) > 1:
+        raise ValueError('newest_only_inventory_returned_multiple_files')
     for item in items:
         validate_file(item)
         directory = spool / 'cache' / source['id']
@@ -377,6 +402,8 @@ def collect_source(source, spool, timeout):
             record = dict(identity, origin_id=origin_id, size=item['size'], mtime_ns=item['mtime_ns'],
                           collected_utc=datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'))
             save_json(record_path, record)
+        # Advance only after both archive and origin record are durably retained.
+        save_json(cursor_path, dict(scope_hash=scope_hash, mtime_ns=item['mtime_ns'], name=item['name']))
     return len(items)
 
 
@@ -581,11 +608,10 @@ def main():
                     for source in config['sources']:
                         stage = 'plan-' + source['id']
                         print('Checking source %s...' % source['id'], flush=True)
-                        print('Listing filenames/metadata only; archive checksums are deferred to run.', flush=True)
-                        items = json.loads(ssh_call(source, dict(operation='plan', patterns=source.get('patterns', ['*.tar']),
-                            min_age_seconds=source.get('min_age_seconds', 120), max_archive_bytes=source.get('max_archive_bytes', 10737418240)),
-                            config.get('timeout_seconds', 1800)))
-                        print('Source %s: %d completed archive(s) available; nothing downloaded or pushed.' % (source['id'], len(items)))
+                        print('Selecting newest eligible file only; archive checksums are deferred to run.', flush=True)
+                        request, _, _ = inventory_request(source, args.spool, 'plan')
+                        items = json.loads(ssh_call(source, request, config.get('timeout_seconds', 1800)))
+                        print('Source %s: %d newest completed archive(s) eligible; older history ignored; nothing downloaded or pushed.' % (source['id'], len(items)))
                     return 0
                 return transfer(config, args.spool, log)
             except Exception as error:
