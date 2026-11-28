@@ -1,16 +1,95 @@
 #!/usr/bin/env python3
-"""Read-only counter search, samples, and local AI explanation of bounded evidence.
-Save as: /home/sysadmin/ran-ai/app/16_counter_tools.py
-Run on the AI server, from any directory, without sudo:
+"""Read-only counter queries, full-data statistics and local AI explanations.
+
+SAVE AND RUN
+  Save as: $HOME/ran-ai/app/16_counter_tools.py
+  Run on the AI server from any directory, without sudo. For documentation lookup,
+  keep counter_specs.py beside this script and build the local Excel index first.
+  Only local ClickHouse/Ollama endpoints are used. Keep real output on lab systems.
+
+COMMANDS AND ALL SUPPORTED ARGUMENTS
+  -h, --help
+      Show general help. Each command also accepts -h or --help.
+  inventory
+      No additional arguments. Shows committed data counts and UTC range.
+      Omitting the command runs inventory.
+  test-stats
+      No additional arguments. Checks analytics SQL using literal fixtures;
+      creates no tables, writes no data, and does not call Ollama.
+  search TERM [--limit N]
+      TERM: case-insensitive counter-label or family substring, 1-128 characters.
+      --limit: optional integer 1-4294967295; omitted means ALL matches.
+      Saves choices privately for subsequent samples/explain --pick N.
+  samples [--pick N] [--rows N] [--location TEXT]
+  explain [--pick N] [--rows N] [--location TEXT]
+      --pick: result number from the latest search; default 1.
+      --rows: sample size 1-20; default 5.
+      --location: exact location; omit for all locations, use "" for valid blanks.
+      samples prints observations; explain also calls the local model and uses
+      a unique matching Excel definition when available. No other filters or
+      analysis modes are accepted by these two commands.
+  ask --counter NAME --ne-type TYPE [OPTIONS] [QUESTION]
+  stats --counter NAME --ne-type TYPE [OPTIONS] [QUESTION]
+      --counter: REQUIRED exact counter name, 1-128 characters; case insensitive.
+          Accepts the CSV name with or without its trailing unit suffix.
+      --ne-type: REQUIRED; ADPF, uADPF, ACPF or AUPF (these spellings).
+      --family: optional exact CSV measurement-family selector.
+      --data-version: optional exact CSV software-version selector.
+      --schema-id: optional full schema identity printed in ambiguous choices.
+          Narrow multiple matches using these selectors; no automatic guessing.
+      --ne-id: optional exact NE ID filter.
+      --location: optional exact location filter; "" selects valid blank locations.
+      --from: optional inclusive ISO timestamp; UTC when no offset is supplied.
+      --to: optional exclusive ISO timestamp; must be later than --from.
+          Example: 2026-11-26T20:00:00Z or 2026-11-26T15:00:00-05:00.
+          Omit a bound for an open interval. Apply time/entity/location filters
+          as arguments; they are NOT extracted from QUESTION text.
+      --rows: supporting/sample rows 1-20; default 5. Never limits statistics.
+      --analysis for ask: auto (default), sample, stats, highest or lowest.
+      --analysis for stats: stats (default), highest or lowest.
+          sample: bounded observations only.
+          stats: all matching observations; one maximum and one minimum example.
+          highest/lowest: all matching observations; up to --rows ranked examples.
+          auto: highest/max/top words route to highest, lowest/min/bottom to
+          lowest, average/mean/statistics/count/observations to stats; otherwise
+          sample. Pass an explicit mode if the question's wording is ambiguous.
+      QUESTION: optional quoted positional text, 1-512 characters.
+          ask default: "What does this counter measure?"
+          stats default: "Show full-data statistics."
+          stats accepts QUESTION for CLI consistency but does not interpret it
+          or call the model; --analysis controls its calculations/output.
+      Neither command requires search or --pick. ask calls the model; stats does
+      not. ask may answer definition questions from documentation alone when
+      no data matches; full-data analysis requires a loaded counter.
+
+FULL EXECUTION EXAMPLES (replace counter/family/ID values as appropriate)
+  Help:
+  "$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/16_counter_tools.py" --help
+  "$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/16_counter_tools.py" ask --help
+  Inventory and server SQL check:
   "$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/16_counter_tools.py" inventory
-  "$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/16_counter_tools.py" search "throughput"
-Search lists all matches by default; optionally append --limit 10 for a shorter list.
-  "$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/16_counter_tools.py" samples --pick 1
-  "$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/16_counter_tools.py" explain --pick 1
-  "$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/16_counter_tools.py" ask --counter "AirMac" --ne-type ADPF "What does this counter measure?"
-Only local ClickHouse/Ollama endpoints are used. Keep real output on lab systems.
-Full-data statistics without AI:
-  "$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/16_counter_tools.py" stats --counter "AirMac" --ne-type ADPF
+  "$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/16_counter_tools.py" test-stats
+  Search and the existing sample/explain workflow:
+  "$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/16_counter_tools.py" search "air"
+  "$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/16_counter_tools.py" search "air" --limit 10
+  "$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/16_counter_tools.py" samples --pick 3 --rows 20 --location ""
+  "$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/16_counter_tools.py" explain --pick 3 --rows 5
+  Ask for a definition, statistics, or ranked observations:
+  "$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/16_counter_tools.py" ask --counter "DataFwdRxThru" --ne-type AUPF "What does this counter measure?"
+  "$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/16_counter_tools.py" ask --counter "DataFwdRxThru" --ne-type AUPF --analysis stats "Explain the minimum, maximum and average."
+  "$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/16_counter_tools.py" ask --counter "DataFwdRxThru" --ne-type AUPF --analysis highest --rows 5 "Show the highest values and their locations."
+  "$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/16_counter_tools.py" ask --counter "DataFwdRxThru" --ne-type AUPF --analysis sample --rows 10 "Explain these sample values."
+  Full-data statistics without AI, with optional selectors and filters:
+  "$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/16_counter_tools.py" stats --counter "DataFwdRxThru" --ne-type AUPF
+  "$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/16_counter_tools.py" stats --counter "DataFwdRxThru" --ne-type AUPF --family "EXACT CSV FAMILY" --data-version "26.B.0" --ne-id "AUPF_104900110" --from "2026-11-26T20:00:00Z" --to "2026-11-26T21:00:00Z" --analysis lowest --rows 10
+  Add --schema-id "FULL SCHEMA ID FROM CHOICES" when still needed to disambiguate.
+
+RESULT SCOPE
+  [S1]: all matching committed observations for the selected counter and filters.
+  [R1] etc.: bounded supporting/sample rows. [D1]: matched Excel definition.
+  Numeric statistics/rankings use approximate Float64 conversion; original raw
+  source values remain unchanged. Average is an unweighted observation mean.
+  No inferred sums, derived KPIs, time-period comparisons or causal diagnosis.
 """
 import argparse
 import importlib.util
