@@ -1,5 +1,19 @@
 # RAN AI Platform
 
+## Full-data statistics and filters
+
+Update `$HOME/ran-ai/app/16_counter_tools.py`, verify the server SQL, and calculate
+statistics without invoking AI:
+
+```bash
+"$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/16_counter_tools.py" test-stats
+"$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/16_counter_tools.py" stats --counter "DataFwdRxThru" --ne-type AUPF
+```
+
+Add exact family/version selectors if choices are listed. `ask` can now explain
+full-data statistics and ranked observations. NE ID, location and UTC interval
+filters are supported. See [commands, examples and numeric semantics](docs/counter-statistics.md).
+
 ## Ask by counter name
 
 Update `scripts/16_counter_tools.py` and `scripts/counter_specs.py` in

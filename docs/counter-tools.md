@@ -1,5 +1,11 @@
 # Controlled counter queries and local AI explanations
 
+## Full-data analytics
+
+The `stats` command and `ask --analysis` modes now support full-data numeric
+statistics, ranked observations, NE ID, location and explicit UTC time filters.
+Start with [server SQL verification and full-data examples](counter-statistics.md).
+
 ## Ask directly by counter name
 
 Transfer both updated `scripts/16_counter_tools.py` and `scripts/counter_specs.py`
@@ -36,10 +42,11 @@ matches are listed for selection by `--family`; duplicates within the same
 family require workbook review. A requested data version/schema with no data
 does not silently fall back to documentation.
 
-Answers cite `[D1]` for documentation and `[R1]` etc. for sample observations.
-This initial `ask` command supports definitions and bounded samples, not natural
-language SQL, full-data maxima/totals, trends, time filtering or comparisons.
-The model is instructed to state when a question requires unavailable evidence.
+Answers cite `[D1]` for documentation, `[R1]` etc. for observations and `[S1]`
+for full-data statistics when an analytics mode is selected. `ask --analysis auto`
+routes highest/lowest/average/count questions to fixed full-data queries; other
+wording uses bounded samples. Full counter sums, derived KPIs and time-period
+comparisons are not inferred. See the analytics instructions for explicit filters.
 All database queries are fixed read-only templates with bound parameters.
 Questions and answers are not saved by this script.
 
