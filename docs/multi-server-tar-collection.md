@@ -1,5 +1,10 @@
 # Multi-server TAR collection through an intermediate server
 
+Version `tar-transfer-v7` pushes available producers without an all-host barrier
+and automatically deletes intermediate TARs after verified AI delivery. Updating
+the intermediate script applies this policy to existing schedules/configuration;
+no ClickHouse query or ingestion acknowledgement is required for cleanup.
+
 Deployment:
 
 ```text
@@ -7,7 +12,7 @@ TAR producers (/log/pm/oss/raw/nr)
              | read-only SSH pulls, every 15 minutes
              v
 Intermediate server (RHEL 8.8): source-specific cache and pending queue
-             | SSH push after every configured source has new completed data
+             | SSH push of whatever new completed data is available
              v
 AI server (sysadmin): checksum-verified batches in landing/server-batches
              | existing archive loader and commit ledger
@@ -29,7 +34,9 @@ $HOME/ran-ai-transfer/spool/cache/SOURCE_ID/ARCHIVE_SHA256.tar
 
 Each original host gets a unique, permanent source ID. Two hosts producing
 `same-name.tar` use different directories. A host later replacing that filename
-with new contents gets a different SHA256 filename. Both versions are retained.
+with new contents gets a different SHA256 filename. Copies are retained until
+verified delivery, then intermediate TARs are deleted. AI copies and origin
+metadata remain available.
 The manifest preserves original host, username, original path/filename, size,
 mtime and SHA256. Compressed TARs are also supported; the hash filename ends in
 `.tar` and the existing loader detects compression from contents.
@@ -203,7 +210,7 @@ python3 "$HOME/ran-ai-transfer/18_transfer_tar_batches.py" run
 ```
 
 `plan` lists counts after checking sources; it downloads and pushes nothing.
-Version `tar-transfer-v6` prints a version banner and safe diagnostic codes on
+Version `tar-transfer-v7` prints a version banner and safe diagnostic codes on
 failure. `CONFIG_JSON` includes the exact line and column in the local config;
 `CONFIG_PERMISSIONS`, `SSH_HOST_KEY`, `SSH_AUTH`, `SSH_CONNECTION`, and
 `REMOTE_PYTHON` distinguish common setup failures without exposing credentials.
@@ -217,16 +224,15 @@ still applies (default 1800 seconds per SSH operation).
 `run` downloads the newest selected content to private `.part` files, verifies size/SHA256, then
 publishes local cache files. Existing cached content is verified and reused.
 
-A new batch waits until there is at least one not-yet-delivered archive origin
-from **every configured source**. If a source is empty, late or unavailable, files
-from the others remain queued across invocations. A failed collection does not
-publish a new partial batch. An already prepared complete batch can retry its
-push even if a subsequent collection scan fails.
+A batch contains whatever not-yet-delivered archives are available. Empty, late,
+standby or unavailable producers do not block successful producers. Collection
+errors are reported and retried on later scans, while available files are pushed.
+`WAITING` means no new archives are currently available to push.
 
-This is an arrival barrier, not matching by collection timestamp: queued archives
-can span several periods. Exact 15-minute interval alignment would require a
-separate naming/timestamp policy. Every eligible queued origin is included; no
-source file is deleted or removed from its producer.
+There is no all-producer or collection-timestamp alignment barrier. A retry batch
+may include queued files from earlier periods. Its manifest lists only included
+sources, and the receiver verifies every included file before publication.
+Producer originals are not deleted.
 
 After verified upload of every batch archive, the AI receiver verifies all files
 again and publishes an atomic `.ready` marker. Interrupted transfers have no
@@ -281,8 +287,9 @@ AI setup succeeds:
 After setup, no manual `run` or `ingest` is required per batch, and no open SSH
 terminal is needed. Cron launches short-lived jobs. The first collection occurs
 at the next 15-minute boundary. `min_age_seconds` still applies: files too young
-for a scan wait until a later scan. Other sources' files remain queued until
-every configured producer has new data.
+for a scan wait until a later scan. Available producers' files are pushed without
+waiting for other producers. Source preflight errors are reported but do not
+prevent setup; the schedules continue retrying those hosts.
 
 Same filenames are stored under `BATCH_ID/SOURCE_ID/SHA256.tar` on the AI server,
 with original filenames in manifests. Incomplete uploads are never ingested.
@@ -347,10 +354,12 @@ Interpret the messages as follows:
 - `Source ...: 1 completed archive(s) verified.`: the selected TAR is available
   in the intermediate cache (downloaded or verified from retained cache).
 - `Source ...: 0 completed archive(s) verified.`: no newer eligible TAR this scan.
-- `WAITING`: the batch is held for missing/new source data or collection recovery.
+- `WAITING`: no new archives are available to push; other producers do not block delivery.
 - `Pushing batch archive ...`: upload started; this alone is not delivery confirmation.
 - `SUCCESS: complete batch pushed`: the AI receiver acknowledged and verified all
   batch files and published the complete-batch marker.
+- `DELETED intermediate TAR`: its intermediate cached copy was removed after
+  verified delivery. This confirms transfer cleanup, not ClickHouse ingestion.
 
 Show recent TAR arrival and successful push times on the intermediate server:
 
@@ -363,6 +372,8 @@ The first lists cached TARs by local file modification time. The second lists
 manifests written after confirmed delivery, so their modification times indicate
 successful push completion. A sent manifest confirms delivery, not database
 ingestion. The folders/files appear after their first successful activity.
+An empty cache is normal after successful pushes because intermediate TARs are
+now deleted. Use sent manifests and `deletions.jsonl` for transfer/cleanup history.
 
 On the **AI server**, follow automatic ClickHouse ingestion:
 
@@ -387,11 +398,28 @@ that directory for the intermediate spool paths above.
 details private. One archive may have multiple origins, so a direct join can
 multiply rows. Do not sum measurements after a many-origin join.
 
-All producer files, intermediate cache/pending records, sent batch manifests and
-AI inbox archives are retained. No retention deletion policy is installed: plan
-disk capacity and review storage growth before unattended operation. A later
-cleanup policy should require confirmed delivery AND ingestion, plus agreed
-retention. SHA256 integrity checks do not replace that retention decision.
+Producer originals and AI inbox copies remain retained. Intermediate cached TARs
+are deleted after the AI receiver confirms complete, checksum-verified delivery.
+The collector does not query ClickHouse or wait for ingestion. The AI's scheduled
+ingester operates independently on the retained AI copies.
+
+Follow deletion audit records on the intermediate server:
+
+```bash
+tail -F "$HOME/ran-ai-transfer/spool/logs/deletions.jsonl"
+```
+
+Each record includes UTC time, source ID, original filename/path, cached filename,
+SHA256, byte size, batch ID and result. `delete_intent` is fsynced before removal;
+`deleted` confirms removal. `delete_failed` is retried on later runs, and
+`already_absent` handles a previous cleanup/crash or external removal. Only
+registered cache TARs are eligible; pending shared references, changed contents
+and symlinks prevent deletion. Archive data never appears in the audit log.
+
+Small origin records, cursors, sent manifests and deletion logs are retained.
+On upgrade, previously delivered cached TARs are also eligible for cleanup from
+their saved sent manifests/delivery ledger. Interrupted or unconfirmed transfers
+retain their TARs for retry. Do not delete those state files to free space.
 
 Private detailed logs live under the intermediate spool's `logs/` and AI
 `ran-ai/logs/`. Console output contains source IDs, counts and status, not archive

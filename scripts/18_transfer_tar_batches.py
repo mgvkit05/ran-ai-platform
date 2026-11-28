@@ -12,6 +12,8 @@ AI server (keep 14_ingest_vendor_tar.py beside this script):
 
 Watch collection/push on the intermediate server:
   tail -F "$HOME/ran-ai-transfer/spool/logs/scheduled-collector.log"
+Watch confirmed intermediate cache deletions:
+  tail -F "$HOME/ran-ai-transfer/spool/logs/deletions.jsonl"
 Watch ClickHouse ingestion on the AI server:
   tail -F "$HOME/ran-ai/logs/scheduled-ingest.log"
 Recent downloaded TARs and successful push manifests (intermediate server):
@@ -33,6 +35,9 @@ Each endpoint accepts user/password or an optional identity_file. Passwords stay
 in the private local config (chmod 600), never in manifests or command arguments.
 Preverified known_hosts are required for both authentication methods.
 Original source archives are never deleted. No model or new Python package needed.
+Available producers are pushed without waiting for empty/unavailable producers.
+Intermediate cached TARs are deleted after verified AI delivery, independent of
+ClickHouse ingestion. Deletions are audited in spool/logs/deletions.jsonl.
 Collection selects only the newest eligible TAR per producer (mtime, then filename
 for ties). Per-source cursors prevent historical backfill after the initial pull.
 """
@@ -61,7 +66,7 @@ SUFFIXES = ('.tar', '.tgz', '.tar.gz', '.tar.bz2', '.tar.xz')
 ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}')
 HASH = re.compile(r'[a-f0-9]{64}')
 PROVENANCE = 'ran_ai.archive_sources_v1'
-VERSION = 'tar-transfer-v6'
+VERSION = 'tar-transfer-v7'
 
 
 def report_failure(error, stage):
@@ -114,6 +119,13 @@ def checksum(p):
     with p.open('rb') as f:
         for b in iter(lambda:f.read(4194304),b''): h.update(b)
     return h.hexdigest()
+def sync_file(p):
+    with p.open('r+b') as f: os.fsync(f.fileno())
+def sync_directory(p):
+    if os.name=='posix':
+        fd=os.open(str(p),os.O_RDONLY)
+        try: os.fsync(fd)
+        finally: os.close(fd)
 def safe_id(s):
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}',s): raise ValueError('invalid_id')
 def snapshot(p):
@@ -194,6 +206,7 @@ elif mode in ('put','publish'):
             raise ValueError('published_archive_changed')
         else:
             temporary.replace(final)
+        sync_directory(folder);sync_directory(batch);sync_directory(root)
     else:
         manifest=q['manifest']
         if manifest['batch_id']!=q['batch_id']: raise ValueError('batch_mismatch')
@@ -205,6 +218,7 @@ elif mode in ('put','publish'):
             p=batch/item['source_id']/(item['sha256']+'.tar')
             if p.is_symlink() or p.parent.is_symlink(): raise ValueError('archive_symlink')
             if p.stat().st_size!=item['size'] or checksum(p)!=item['sha256']: raise ValueError('incomplete_batch')
+            sync_file(p)
         if expected!=received: raise ValueError('missing_source')
         content=json.dumps(manifest,sort_keys=True,separators=(',',':')).encode()
         manifest_path=batch/'manifest.json';ready=batch/'.ready'
@@ -218,6 +232,7 @@ elif mode in ('put','publish'):
             marker=batch/'.ready.tmp'
             if marker.is_symlink(): raise ValueError('manifest_symlink')
             marker.write_text(hashlib.sha256(content).hexdigest());marker.replace(ready)
+        sync_file(manifest_path);sync_file(ready);sync_directory(batch);sync_directory(root)
     print('OK')
 else: raise ValueError('unknown_operation')
 '''
@@ -409,8 +424,17 @@ def collect_source(source, spool, timeout):
     items = json.loads(ssh_call(source, request, timeout))
     if len(items) > 1:
         raise ValueError('newest_only_inventory_returned_multiple_files')
+    state_path = spool / 'delivered.json'
+    delivered = set(json.loads(state_path.read_text()) if state_path.exists() else [])
+    collected = 0
     for item in items:
         validate_file(item)
+        identity = dict(source_id=source['id'], host=source['host'], user=source['user'],
+                        source_path=source['directory'].rstrip('/') + '/' + item['name'], sha256=item['sha256'])
+        origin_id = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+        if origin_id in delivered:
+            save_json(cursor_path, dict(scope_hash=scope_hash, mtime_ns=item['mtime_ns'], name=item['name']))
+            continue
         directory = spool / 'cache' / source['id']
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / (item['sha256'] + '.tar')
@@ -423,9 +447,6 @@ def collect_source(source, spool, timeout):
             if temporary.stat().st_size != item['size'] or digest(temporary) != item['sha256']:
                 raise ValueError('download_checksum_mismatch')
             temporary.replace(path)
-        identity = dict(source_id=source['id'], host=source['host'], user=source['user'],
-                        source_path=source['directory'].rstrip('/') + '/' + item['name'], sha256=item['sha256'])
-        origin_id = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
         record_path = spool / 'records' / (origin_id + '.json')
         if not record_path.exists():
             record = dict(identity, origin_id=origin_id, size=item['size'], mtime_ns=item['mtime_ns'],
@@ -433,7 +454,8 @@ def collect_source(source, spool, timeout):
             save_json(record_path, record)
         # Advance only after both archive and origin record are durably retained.
         save_json(cursor_path, dict(scope_hash=scope_hash, mtime_ns=item['mtime_ns'], name=item['name']))
-    return len(items)
+        collected += 1
+    return collected
 
 
 def validate_manifest(manifest):
@@ -463,8 +485,10 @@ def prepare_batch(config, spool, delivered):
         item = json.loads(path.read_text())
         if item['origin_id'] not in delivered and item['source_id'] in sources:
             records.append(item)
-    if set(sources) != {r['source_id'] for r in records}:
+    if not records:
         return None
+    available = {r['source_id'] for r in records}
+    sources = [source for source in sources if source in available]
     batch = dict(version=1, batch_id=datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid.uuid4().hex[:12],
                  sources=sources, archives=records)
     validate_manifest(batch)
@@ -489,11 +513,99 @@ def push_batch(config, spool, batch):
             ssh_call(target, dict(operation='put', batch_id=batch['batch_id'], source_id=item['source_id'],
                                  sha256=item['sha256'], size=item['size']), timeout, incoming=incoming)
         sent.add(key)
-    ssh_call(target, dict(operation='publish', batch_id=batch['batch_id'], manifest=batch), timeout)
+    confirmation = ssh_call(target, dict(operation='publish', batch_id=batch['batch_id'], manifest=batch), timeout)
+    if confirmation.strip() != b'OK':
+        raise RuntimeError('AI_delivery_confirmation_not_received')
+
+
+def deletion_event(spool, event):
+    directory = spool / 'logs'
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / 'deletions.jsonl'
+    if path.is_symlink():
+        raise ValueError('deletion_audit_symlink')
+    with path.open('a', encoding='utf-8') as output:
+        path.chmod(0o600)
+        output.write(json.dumps(dict(event, utc=datetime.now(timezone.utc).isoformat()), ensure_ascii=True) + '\n')
+        output.flush()
+        os.fsync(output.fileno())
+
+
+def cleanup_delivered(spool, delivered, log):
+    """Delete only registered cache TARs whose every origin has verified delivery."""
+    pending = set()
+    active_path = spool / 'active-batch.json'
+    if active_path.exists():
+        active = json.loads(active_path.read_text())
+        validate_manifest(active)
+        pending.update((r['source_id'], r['sha256']) for r in active['archives'])
+    for record_path in (spool / 'records').glob('*.json'):
+        record = json.loads(record_path.read_text())
+        if record['origin_id'] not in delivered:
+            pending.add((record['source_id'], record['sha256']))
+    failed = False
+    for manifest_path in sorted((spool / 'sent').glob('*.json')):
+        batch = json.loads(manifest_path.read_text())
+        validate_manifest(batch)
+        marker = spool / 'cleaned' / (batch['batch_id'] + '.json')
+        if marker.exists():
+            continue
+        if not all(item['origin_id'] in delivered for item in batch['archives']):
+            continue
+        complete = True
+        seen = set()
+        for item in batch['archives']:
+            key = (item['source_id'], item['sha256'])
+            if key in seen:
+                continue
+            seen.add(key)
+            if key in pending:
+                complete = False
+                continue
+            cache = spool / 'cache'
+            path = cache / item['source_id'] / (item['sha256'] + '.tar')
+            event = dict(batch_id=batch['batch_id'], source_id=item['source_id'], sha256=item['sha256'],
+                         cache_file=str(path.absolute()), original_file=item['source_path'], bytes=item['size'],
+                         reason='verified_AI_delivery')
+            try:
+                # Exact, nonrecursive deletion restricted to this registered cache path.
+                if cache.is_symlink() or path.parent.is_symlink() or path.is_symlink():
+                    raise ValueError('cache_cleanup_symlink')
+                path.resolve().relative_to(cache.resolve())
+                if not path.exists():
+                    deletion_event(spool, dict(event, result='already_absent'))
+                    continue
+                if not stat.S_ISREG(path.lstat().st_mode) or path.stat().st_size != item['size'] or digest(path) != item['sha256']:
+                    raise ValueError('cache_cleanup_content_changed')
+                deletion_event(spool, dict(event, result='delete_intent'))
+                path.unlink()
+                deletion_event(spool, dict(event, result='deleted'))
+                print('DELETED intermediate TAR: source=%s; file=%s; bytes=%d; verified delivery complete.' %
+                      (item['source_id'], path.name, item['size']), flush=True)
+            except Exception:
+                complete = False
+                failed = True
+                traceback.print_exc(file=log)
+                log.flush()
+                deletion_event(spool, dict(event, result='delete_failed'))
+                print('Cleanup pending for source %s; transfer is confirmed and deletion will retry.' % item['source_id'], flush=True)
+        if complete:
+            save_json(marker, dict(batch_id=batch['batch_id'], completed_utc=datetime.now(timezone.utc).isoformat()))
+    return failed
 
 
 def transfer(config, spool, log):
-    failed = False
+    state_path = spool / 'delivered.json'
+    delivered = set(json.loads(state_path.read_text()) if state_path.exists() else [])
+    active = spool / 'active-batch.json'
+    if active.exists():
+        previous = json.loads(active.read_text())
+        validate_manifest(previous)
+        sent = spool / 'sent' / (previous['batch_id'] + '.json')
+        if (all(item['origin_id'] in delivered for item in previous['archives']) and sent.exists()
+                and json.loads(sent.read_text()) == previous):
+            active.unlink()  # Recover a crash after delivery state was saved.
+    failed = cleanup_delivered(spool, delivered, log)
     for source in config['sources']:
         try:
             print('Collecting source %s...' % source['id'], flush=True)
@@ -505,23 +617,18 @@ def transfer(config, spool, log):
             log.flush()
             print('Source %s unavailable or incomplete; retained files remain queued.' % source['id'], flush=True)
             report_failure(error, 'collect-' + source['id'])
-    state_path = spool / 'delivered.json'
-    delivered = set(json.loads(state_path.read_text()) if state_path.exists() else [])
-    active = spool / 'active-batch.json'
-    if failed and not active.exists():
-        print('WAITING: a source collection failed. No new batch published; all collected files retained for retry.')
-        return 1
     batch = json.loads(active.read_text()) if active.exists() else prepare_batch(config, spool, delivered)
     if batch is None:
-        print('WAITING: at least one new archive from every configured source is required. No batch pushed.')
+        print('WAITING: no new available archives to push. Other producers do not block delivery.')
         return int(failed)
     push_batch(config, spool, batch)
     delivered.update(r['origin_id'] for r in batch['archives'])
-    save_json(state_path, sorted(delivered))
     save_json(spool / 'sent' / (batch['batch_id'] + '.json'), batch)
+    save_json(state_path, sorted(delivered))
     active.unlink()
-    print('SUCCESS: complete batch pushed; %d sources, %d archive origins. Originals and local cache retained.' %
+    print('SUCCESS: complete batch pushed; %d sources, %d archive origins. AI copies verified; intermediate cleanup follows.' %
           (len(batch['sources']), len(batch['archives'])))
+    failed = cleanup_delivered(spool, delivered, log) or failed
     return int(failed)
 
 
@@ -716,8 +823,12 @@ def automation(args, root):
         read_crontab()  # Fail before remote changes if this account cannot manage cron.
         for source in config['sources']:
             print('Preflight: checking source %s...' % source['id'], flush=True)
-            request, _, _ = inventory_request(source, args.spool, 'plan')
-            json.loads(ssh_call(source, request, config.get('timeout_seconds', 1800)))
+            try:
+                request, _, _ = inventory_request(source, args.spool, 'plan')
+                json.loads(ssh_call(source, request, config.get('timeout_seconds', 1800)))
+            except Exception as error:
+                report_failure(error, 'preflight-' + source['id'])
+                print('Source %s unavailable now; automation will retry it without blocking available producers.' % source['id'], flush=True)
     target = config['ai']
     default_script = str(Path(target['directory']).parent.parent.parent / 'app/18_transfer_tar_batches.py')
     request = dict(operation='schedule', script=target.get('ingest_script', default_script),

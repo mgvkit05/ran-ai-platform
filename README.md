@@ -3,11 +3,14 @@
 ## Multi-server TAR collection through an intermediate server
 
 `scripts/18_transfer_tar_batches.py` collects on the RHEL intermediate server,
-waits for new archives from every configured producer, and pushes verified batches
+and pushes verified batches from available producers without waiting for inactive hosts
 to the AI server for the existing ClickHouse loader. Collection starts with only
 the newest eligible TAR per producer and remembers its position so older history
 is never backfilled. Source-specific hash paths
 prevent collisions when every server uses the same TAR filename.
+After verified delivery, intermediate cached TARs are deleted and audited in
+`spool/logs/deletions.jsonl`. The collector does not query ClickHouse or wait for
+ingestion; the AI server processes its retained copies independently.
 Each producer can now have its own `user` and `password` in the intermediate
 server's private `config.json` (mode 600); key authentication remains optional.
 Update script 18 on both servers, then enable automatic collection and AI

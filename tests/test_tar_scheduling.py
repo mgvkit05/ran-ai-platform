@@ -136,6 +136,21 @@ class TarSchedulingTests(unittest.TestCase):
                     bridge.automation(arguments(root, action='install-automation'), root)
                 install.assert_not_called()
 
+    def test_unavailable_producer_does_not_block_automation_setup(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = dict(sources=[dict(id='standby', host='producer', user='reader', directory='/logs')],
+                          ai=dict(host='ai', user='sysadmin', directory='/home/sysadmin/ran-ai/data/landing/server-batches'))
+            def ssh(target, request, timeout):
+                if request['operation'] == 'plan':
+                    raise RuntimeError('source temporarily offline')
+                return b'{"returncode":0,"output":"AI installed"}'
+            with patch.object(bridge, 'load_config', return_value=config), \
+                 patch.object(bridge, 'cron_active', return_value=True), patch.object(bridge, 'read_crontab', return_value=''), \
+                 patch.object(bridge, 'ssh_call', ssh), patch.object(bridge, 'manage_schedule', return_value=0), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(bridge.automation(arguments(root, action='install-automation'), root), 0)
+
 
 if __name__ == '__main__':
     unittest.main()

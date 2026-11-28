@@ -67,6 +67,102 @@ def loader_for(db):
 
 
 class TarBatchTests(unittest.TestCase):
+    def test_successful_delivery_deletes_only_intermediate_tar_and_audits_it(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config, spool, _, inbox = setup(Path(temporary))
+            producer = Path(config['sources'][0]['directory']) / 'same.tar'
+            make_archive(producer)
+            with patch.object(bridge, 'ssh_call', local_remote), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(bridge.transfer(config, spool, io.StringIO()), 0)
+            self.assertTrue(producer.exists())
+            self.assertEqual(list(spool.glob('cache/*/*.tar')), [])
+            self.assertEqual(len(list(inbox.glob('*/*/*.tar'))), 1)
+            events = [json.loads(line) for line in (spool / 'logs/deletions.jsonl').read_text().splitlines()]
+            self.assertEqual([r['result'] for r in events], ['delete_intent', 'deleted'])
+            self.assertTrue(events[1]['original_file'].endswith('same.tar'))
+            self.assertEqual(events[1]['reason'], 'verified_AI_delivery')
+            self.assertIn('utc', events[1])
+
+    def test_failed_delivery_confirmation_keeps_intermediate_copies(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config, spool, _, _ = setup(Path(temporary))
+            make_archive(Path(config['sources'][0]['directory']) / 'same.tar')
+            def no_confirmation(target, request, timeout, **kwargs):
+                if request['operation'] == 'publish':
+                    return b'Unexpected output'
+                return local_remote(target, request, timeout, **kwargs)
+            with patch.object(bridge, 'ssh_call', no_confirmation), contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaisesRegex(RuntimeError, 'AI_delivery_confirmation_not_received'):
+                    bridge.transfer(config, spool, io.StringIO())
+            self.assertEqual(len(list(spool.glob('cache/*/*.tar'))), 1)
+            self.assertFalse((spool / 'logs/deletions.jsonl').exists())
+
+    def test_failed_deletion_retries_without_resending_archive(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config, spool, _, inbox = setup(Path(temporary))
+            make_archive(Path(config['sources'][0]['directory']) / 'same.tar')
+            unlink = Path.unlink
+            def refuse_tar(path, *args, **kwargs):
+                if path.suffix == '.tar':
+                    raise PermissionError('simulated file busy')
+                return unlink(path, *args, **kwargs)
+            with patch.object(bridge, 'ssh_call', local_remote), patch.object(Path, 'unlink', refuse_tar), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(bridge.transfer(config, spool, io.StringIO()), 1)
+            self.assertEqual(len(list(spool.glob('cache/*/*.tar'))), 1)
+            with patch.object(bridge, 'ssh_call', local_remote), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(bridge.transfer(config, spool, io.StringIO()), 0)
+            self.assertEqual(list(spool.glob('cache/*/*.tar')), [])
+            self.assertEqual(len(list(inbox.glob('*/.ready'))), 1)
+
+    def test_cleanup_crash_recovery_does_not_try_to_resend_deleted_tar(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config, spool, _, inbox = setup(Path(temporary))
+            make_archive(Path(config['sources'][0]['directory']) / 'same.tar')
+            with patch.object(bridge, 'ssh_call', local_remote), contextlib.redirect_stdout(io.StringIO()):
+                bridge.transfer(config, spool, io.StringIO())
+                sent = json.loads(next((spool / 'sent').glob('*.json')).read_text())
+                bridge.save_json(spool / 'active-batch.json', sent)
+                self.assertEqual(bridge.transfer(config, spool, io.StringIO()), 0)
+            self.assertFalse((spool / 'active-batch.json').exists())
+            self.assertEqual(len(list(inbox.glob('*/.ready'))), 1)
+
+    def test_pending_origin_prevents_deletion_of_shared_cache_file(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config, spool, _, _ = setup(Path(temporary))
+            source = config['sources'][0]
+            producer = Path(source['directory']) / 'same.tar'
+            make_archive(producer)
+            with patch.object(bridge, 'ssh_call', local_remote):
+                bridge.collect_source(source, spool, 30)
+            item = json.loads(next((spool / 'records').glob('*.json')).read_text())
+            batch = dict(version=1, batch_id='confirmed', sources=[source['id']], archives=[item])
+            bridge.save_json(spool / 'sent/confirmed.json', batch)
+            pending = dict(item, origin_id='a' * 64, source_path='/other/original.tar')
+            bridge.save_json(spool / 'records' / ('a' * 64 + '.json'), pending)
+            with contextlib.redirect_stdout(io.StringIO()):
+                bridge.cleanup_delivered(spool, {item['origin_id']}, io.StringIO())
+            self.assertEqual(len(list(spool.glob('cache/*/*.tar'))), 1)
+            self.assertFalse((spool / 'cleaned/confirmed.json').exists())
+
+    def test_changed_delivered_cache_file_is_never_deleted(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config, spool, _, _ = setup(Path(temporary))
+            source = config['sources'][0]
+            make_archive(Path(source['directory']) / 'same.tar')
+            with patch.object(bridge, 'ssh_call', local_remote):
+                bridge.collect_source(source, spool, 30)
+            item = json.loads(next((spool / 'records').glob('*.json')).read_text())
+            batch = dict(version=1, batch_id='confirmed', sources=[source['id']], archives=[item])
+            bridge.save_json(spool / 'sent/confirmed.json', batch)
+            cache = next(spool.glob('cache/*/*.tar'))
+            cache.write_bytes(b'changed file')
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertTrue(bridge.cleanup_delivered(spool, {item['origin_id']}, io.StringIO()))
+            self.assertTrue(cache.exists())
+            event = json.loads((spool / 'logs/deletions.jsonl').read_text().splitlines()[-1])
+            self.assertEqual(event['result'], 'delete_failed')
+
     def test_only_latest_tar_is_collected_then_waits_without_falling_back(self):
         with tempfile.TemporaryDirectory() as temporary:
             config, spool, _, _ = setup(Path(temporary))
@@ -176,7 +272,7 @@ class TarBatchTests(unittest.TestCase):
         ast.parse(Path(bridge.__file__).read_text(), feature_version=(3, 6))
         ast.parse(bridge.REMOTE, feature_version=(3, 6))
 
-    def test_one_failed_source_blocks_new_batch_but_retains_other_sources(self):
+    def test_one_failed_source_does_not_block_delivery_of_other_sources(self):
         with tempfile.TemporaryDirectory() as temporary:
             config, spool, _, inbox = setup(Path(temporary))
             for source in config['sources']:
@@ -189,8 +285,8 @@ class TarBatchTests(unittest.TestCase):
             log = io.StringIO()
             with patch.object(bridge, 'ssh_call', broken), contextlib.redirect_stdout(output):
                 self.assertEqual(bridge.transfer(config, spool, log), 1)
-            self.assertEqual(len(list(spool.glob('cache/source-2/*.tar'))), 1)
-            self.assertEqual(list(inbox.glob('*/.ready')), [])
+            self.assertEqual(len(list(spool.glob('cache/source-2/*.tar'))), 0)
+            self.assertEqual(len(list(inbox.glob('*/.ready'))), 1)
             self.assertNotIn('PRIVATE_CONNECTION_DETAIL', output.getvalue())
             self.assertIn('PRIVATE_CONNECTION_DETAIL', log.getvalue())
 
@@ -305,7 +401,7 @@ class TarBatchTests(unittest.TestCase):
             self.assertEqual(len(ready), 1)
             batch = json.loads((ready[0].parent / 'manifest.json').read_text())
             self.assertEqual(len(batch['archives']), 2)
-            self.assertEqual(len(list(spool.glob('cache/*/*.tar'))), 2)
+            self.assertEqual(len(list(spool.glob('cache/*/*.tar'))), 0)
             self.assertEqual(len(list(ready[0].parent.glob('*/*.tar'))), 2)
             for path in list(spool.rglob('*.json')) + list(inbox.rglob('*.json')):
                 self.assertNotIn('PRIVATE_PRODUCER_PASSWORD', path.read_text())
@@ -324,18 +420,18 @@ class TarBatchTests(unittest.TestCase):
             self.assertEqual(len(db.visible_rows()), 6)
             self.assertEqual(len(db.tables[bridge.PROVENANCE]), 2)
 
-    def test_waits_for_new_files_from_every_source_and_does_not_resend(self):
+    def test_pushes_available_files_without_waiting_and_does_not_resend(self):
         with tempfile.TemporaryDirectory() as temporary:
             config, spool, _, inbox = setup(Path(temporary))
             first = Path(config['sources'][0]['directory']) / 'same.tar'
             make_archive(first)
             with patch.object(bridge, 'ssh_call', local_remote), contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(bridge.transfer(config, spool, io.StringIO()), 0)
-                self.assertEqual(list(inbox.glob('*/.ready')), [])
+                self.assertEqual(len(list(inbox.glob('*/.ready'))), 1)
                 make_archive(Path(config['sources'][1]['directory']) / 'same.tar')
                 self.assertEqual(bridge.transfer(config, spool, io.StringIO()), 0)
                 self.assertEqual(bridge.transfer(config, spool, io.StringIO()), 0)
-            self.assertEqual(len(list(inbox.glob('*/.ready'))), 1)
+            self.assertEqual(len(list(inbox.glob('*/.ready'))), 2)
             self.assertTrue(first.exists())
 
     def test_identical_tar_from_two_hosts_keeps_two_origins_and_one_data_copy(self):
