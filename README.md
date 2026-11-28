@@ -1,5 +1,20 @@
 # RAN AI Platform
 
+## View non-zero counters without AI
+
+Save `scripts/19_view_nonzero_counters.py` as
+`/home/sysadmin/ran-ai/app/19_view_nonzero_counters.py` and run:
+
+```bash
+/home/sysadmin/ran-ai/venv/bin/python /home/sysadmin/ran-ai/app/19_view_nonzero_counters.py
+```
+
+Displays up to 10 finite non-zero counter values, with counter name, UTC time,
+NE ID, location, family and version. Optional arguments: `--rows 25`,
+`--counter "throughput"`, and `--ne-id "AUPF_104900110"`. No LLM or extra packages
+are used; the script reads committed ClickHouse data through the existing local
+HTTP endpoint. Numeric filtering uses Float64; original value strings are printed.
+
 ## Multi-server TAR collection through an intermediate server
 
 `scripts/18_transfer_tar_batches.py` collects on the RHEL intermediate server,
