@@ -10,7 +10,16 @@ is never backfilled. Source-specific hash paths
 prevent collisions when every server uses the same TAR filename.
 Each producer can now have its own `user` and `password` in the intermediate
 server's private `config.json` (mode 600); key authentication remains optional.
-See [configuration, one-time verification and 15-minute cron setup](docs/multi-server-tar-collection.md).
+Update script 18 on both servers, then enable automatic collection and AI
+ingestion once from the intermediate server:
+
+```bash
+python3 -u "$HOME/ran-ai-transfer/18_transfer_tar_batches.py" install-automation
+```
+
+This installs a 15-minute collector and a 1-minute AI ingester using existing
+SSH credentials. Check with the `automation-status` action. See
+[configuration and automatic scheduling](docs/multi-server-tar-collection.md).
 
 ## Full-data statistics and filters
 

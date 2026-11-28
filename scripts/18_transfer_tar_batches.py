@@ -5,13 +5,19 @@ Intermediate server (Python 3.6+ and OpenSSH client):
   python3 "$HOME/ran-ai-transfer/18_transfer_tar_batches.py" init-config
   python3 "$HOME/ran-ai-transfer/18_transfer_tar_batches.py" plan
   python3 "$HOME/ran-ai-transfer/18_transfer_tar_batches.py" run
+  python3 "$HOME/ran-ai-transfer/18_transfer_tar_batches.py" install-automation
+  python3 "$HOME/ran-ai-transfer/18_transfer_tar_batches.py" automation-status
 AI server (keep 14_ingest_vendor_tar.py beside this script):
   "$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/18_transfer_tar_batches.py" ingest
 
-Arguments: action {init-config,plan,run,ingest}; --config PATH (default
+Arguments: action {init-config,plan,run,ingest,install-automation,automation-status,
+install-schedule,schedule-status,remove-schedule}; --config PATH (default
 $HOME/ran-ai-transfer/config.json); --spool PATH (default $HOME/ran-ai-transfer/spool);
 --inbox PATH (AI ingest only, default $HOME/ran-ai/data/landing/server-batches).
-Run as a normal user, without sudo. Configure cron separately for 15-minute runs.
+--role {collector,ingest} is required for the three local schedule commands.
+install-automation installs a 15-minute collector on this server and a 1-minute
+ingester on the AI server over configured SSH. Update this script on BOTH first.
+Run as a normal user without sudo; existing crond must be active on both hosts.
 Each endpoint accepts user/password or an optional identity_file. Passwords stay
 in the private local config (chmod 600), never in manifests or command arguments.
 Preverified known_hosts are required for both authentication methods.
@@ -44,7 +50,7 @@ SUFFIXES = ('.tar', '.tgz', '.tar.gz', '.tar.bz2', '.tar.xz')
 ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}')
 HASH = re.compile(r'[a-f0-9]{64}')
 PROVENANCE = 'ran_ai.archive_sources_v1'
-VERSION = 'tar-transfer-v5'
+VERSION = 'tar-transfer-v6'
 
 
 def report_failure(error, stage):
@@ -76,6 +82,12 @@ def report_failure(error, stage):
         code, hint = 'LOCAL_FILE_MISSING', 'Check config/script paths and that the ssh client is installed.'
     elif isinstance(error, ValueError) and re.fullmatch('[a-z_]+', str(error)):
         code, hint = 'CONFIG_OR_VALIDATION', str(error)
+    elif 'cron_daemon_not_active' in detail:
+        code, hint = 'CRON_SERVICE', 'The administrator must enable/start crond on this server before scheduling.'
+    elif 'remote_schedule_failed' in detail:
+        code, hint = 'REMOTE_SCHEDULE', 'Update script 18 on the AI server; verify crond and the existing loader there. See the private log.'
+    elif isinstance(error, RuntimeError) and re.fullmatch('[a-z_]+', str(error)):
+        code, hint = 'SCHEDULE_OR_RUNTIME', str(error)
     print('Diagnostic: %s; stage=%s; code=%s; error=%s' % (VERSION, stage, code, type(error).__name__), flush=True)
     print(hint, flush=True)
     for frame in traceback.extract_tb(error.__traceback__)[-4:]:
@@ -83,7 +95,7 @@ def report_failure(error, stage):
 
 # Sent as fixed Python code over SSH. Requests are JSON on stdin, never shell code.
 REMOTE = r'''
-import fnmatch,hashlib,json,os,pathlib,re,stat,sys,time
+import fnmatch,hashlib,json,os,pathlib,re,stat,subprocess,sys,time
 os.umask(0o077)
 q=json.loads(sys.stdin.buffer.readline())
 def checksum(p):
@@ -135,6 +147,11 @@ if mode in ('list','plan','fetch'):
                 h.update(b);sys.stdout.buffer.write(b)
         sys.stdout.buffer.flush()
         if snapshot(p)!=expected or h.hexdigest()!=q['file']['sha256']: raise ValueError('source_changed_during_copy')
+elif mode=='schedule':
+    if q['action'] not in ('install-schedule','schedule-status'): raise ValueError('invalid_schedule_action')
+    result=subprocess.run([sys.executable,q['script'],q['action'],'--role','ingest','--inbox',q['directory']],
+                          stdout=subprocess.PIPE,stderr=subprocess.PIPE,universal_newlines=True)
+    print(json.dumps(dict(returncode=result.returncode,output=result.stdout,error=result.stderr)))
 elif mode in ('put','publish'):
     root=pathlib.Path(q['directory']).resolve(strict=True)
     safe_id(q['batch_id'])
@@ -323,7 +340,8 @@ def ssh_exchange(target, request, timeout, incoming, outgoing, auth_options, env
         stopped = threading.Event()
         started = time.monotonic()
         labels = {'plan': 'remote directory listing', 'list': 'remote inventory/checksums',
-                  'fetch': 'archive download', 'put': 'archive upload', 'publish': 'batch verification/publication'}
+                  'fetch': 'archive download', 'put': 'archive upload', 'publish': 'batch verification/publication',
+                  'schedule': 'AI scheduler setup/status'}
         label = labels.get(request.get('operation'), 'SSH operation')
         def heartbeat():
             while not stopped.wait(15):
@@ -559,10 +577,160 @@ def ingest_batches(inbox, root, log, loader=None):
     return int(bool(totals['failures']))
 
 
+def cron_command(arguments, text=None):
+    environment = dict(os.environ, LC_ALL='C')
+    return subprocess.run(arguments, input=text, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          universal_newlines=True, env=environment)
+
+
+def read_crontab():
+    result = cron_command(['crontab', '-l'])
+    if result.returncode == 0:
+        return result.stdout
+    if result.returncode == 1 and 'no crontab for' in result.stderr.lower():
+        return ''
+    raise RuntimeError('cannot_read_user_crontab')
+
+
+def cron_active():
+    if not shutil.which('crontab'):
+        raise RuntimeError('crontab_client_not_installed')
+    result = cron_command(['systemctl', 'is-active', 'crond'])
+    return result.returncode == 0 and result.stdout.strip() == 'active'
+
+
+def replace_schedule(existing, role, entry, script):
+    begin, end = '# BEGIN RAN-AI-TAR ' + role, '# END RAN-AI-TAR ' + role
+    lines = []
+    inside = False
+    for line in existing.splitlines():
+        if line == begin:
+            if inside:
+                raise ValueError('malformed_managed_cron_block')
+            inside = True
+            continue
+        if line == end:
+            if not inside:
+                raise ValueError('malformed_managed_cron_block')
+            inside = False
+            continue
+        if inside:
+            continue
+        # Replace earlier hand-written entries for this exact script/role too.
+        fields = line.split(None, 5)
+        if len(fields) == 6 and not line.lstrip().startswith('#'):
+            try:
+                tokens = [os.path.expandvars(token) for token in shlex.split(fields[5])]
+            except ValueError:
+                tokens = []
+            action = 'run' if role == 'collector' else 'ingest'
+            if str(script) in tokens and action in tokens:
+                continue
+        lines.append(line)
+    if inside:
+        raise ValueError('malformed_managed_cron_block')
+    if entry is not None:
+        lines += [begin, entry, end]
+    return '\n'.join(lines) + ('\n' if lines else '')
+
+
+def manage_schedule(args, root):
+    if args.role not in ('collector', 'ingest'):
+        raise ValueError('schedule_commands_require_role')
+    role = args.role
+    script = Path(__file__).resolve()
+    active = cron_active()
+    if args.action == 'install-schedule' and not active:
+        raise RuntimeError('cron_daemon_not_active')
+    before = read_crontab()
+    if args.action == 'schedule-status':
+        marker = '# BEGIN RAN-AI-TAR ' + role
+        installed = marker in before.splitlines()
+        print('Schedule: role=%s; installed=%s; crond=%s; interval=%s' %
+              (role, installed, 'active' if active else 'inactive', '15 minutes' if role == 'collector' else '1 minute'))
+        return 0 if installed and active else 1
+    base = args.spool if role == 'collector' else root
+    (base / 'run').mkdir(parents=True, exist_ok=True)
+    (base / 'logs').mkdir(exist_ok=True)
+    entry = None
+    if args.action == 'install-schedule':
+        if role == 'collector':
+            load_config(args.config)
+            command = [sys.executable, '-u', str(script), 'run', '--config', str(args.config.resolve()), '--spool', str(args.spool.resolve())]
+        else:
+            if not script.with_name('14_ingest_vendor_tar.py').is_file():
+                raise ValueError('install_loader_14_beside_script_18')
+            if not (root / 'config/clickhouse-server/credentials.json').is_file():
+                raise ValueError('complete_clickhouse_setup_before_scheduling')
+            args.inbox.resolve().relative_to((root / 'data/landing').resolve())
+            args.inbox.mkdir(parents=True, exist_ok=True)
+            command = [sys.executable, '-u', str(script), 'ingest', '--inbox', str(args.inbox.resolve())]
+        launcher = base / 'run' / ('scheduled-' + role + '.sh')
+        output = base / 'logs' / ('scheduled-' + role + '.log')
+        if launcher.is_symlink() or output.is_symlink():
+            raise ValueError('schedule_path_symlink')
+        content = '#!/bin/sh\numask 077\nPATH=/usr/local/bin:/usr/bin:/bin\nexport PATH\nexec ' + ' '.join(shlex.quote(x) for x in command)
+        content += ' >> ' + shlex.quote(str(output.resolve())) + ' 2>&1\n'
+        temporary = launcher.with_suffix('.tmp')
+        if temporary.is_symlink():
+            raise ValueError('schedule_path_symlink')
+        temporary.write_text(content, encoding='utf-8')
+        temporary.chmod(0o700)
+        temporary.replace(launcher)
+        interval = '*/15 * * * *' if role == 'collector' else '* * * * *'
+        quoted = shlex.quote(str(launcher.resolve()))
+        if '\n' in quoted or '\r' in quoted:
+            raise ValueError('schedule_path_contains_newline')
+        entry = interval + ' /bin/sh ' + quoted.replace('%', '\\%')
+    after = replace_schedule(before, role, entry, script)
+    if after != before:
+        stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-%d' % os.getpid()
+        (base / 'run' / ('crontab-before-' + role + '-' + stamp + '.txt')).write_text(before, encoding='utf-8')
+        if read_crontab() != before:
+            raise RuntimeError('crontab_changed_during_setup_retry')
+        if cron_command(['crontab', '-'], after).returncode:
+            raise RuntimeError('cannot_install_user_crontab')
+        if read_crontab() != after:
+            raise RuntimeError('crontab_verification_failed_review_backup')
+    print('SUCCESS: %s schedule %s; unrelated cron jobs preserved.' %
+          (role, 'installed' if entry is not None else 'removed'))
+    return 0
+
+
+def automation(args, root):
+    config = load_config(args.config)
+    if args.action == 'install-automation':
+        if not cron_active():
+            raise RuntimeError('cron_daemon_not_active')
+        read_crontab()  # Fail before remote changes if this account cannot manage cron.
+        for source in config['sources']:
+            print('Preflight: checking source %s...' % source['id'], flush=True)
+            request, _, _ = inventory_request(source, args.spool, 'plan')
+            json.loads(ssh_call(source, request, config.get('timeout_seconds', 1800)))
+    target = config['ai']
+    default_script = str(Path(target['directory']).parent.parent.parent / 'app/18_transfer_tar_batches.py')
+    request = dict(operation='schedule', script=target.get('ingest_script', default_script),
+                   action='install-schedule' if args.action == 'install-automation' else 'schedule-status')
+    print('Configuring AI ingestion...' if args.action == 'install-automation' else 'Checking AI ingestion...', flush=True)
+    remote = json.loads(ssh_call(target, request, config.get('timeout_seconds', 1800)))
+    print(remote['output'], end='', flush=True)
+    if remote['returncode'] and args.action == 'install-automation':
+        raise RuntimeError('remote_schedule_failed: ' + remote.get('error', ''))
+    local = argparse.Namespace(**vars(args))
+    local.role = 'collector'
+    local.action = 'install-schedule' if args.action == 'install-automation' else 'schedule-status'
+    result = manage_schedule(local, root)
+    if result == 0 and remote['returncode'] == 0:
+        print('Automation ready: collect/push every 15 minutes; AI checks complete batches every minute.')
+    return int(bool(result or remote['returncode']))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--version', action='version', version=VERSION)
-    parser.add_argument('action', choices=('init-config', 'plan', 'run', 'ingest'))
+    parser.add_argument('action', choices=('init-config', 'plan', 'run', 'ingest', 'install-automation', 'automation-status',
+                                         'install-schedule', 'schedule-status', 'remove-schedule'))
+    parser.add_argument('--role', choices=('collector', 'ingest'))
     parser.add_argument('--config', type=Path, default=Path.home() / 'ran-ai-transfer/config.json')
     parser.add_argument('--spool', type=Path, default=Path.home() / 'ran-ai-transfer/spool')
     parser.add_argument('--inbox', type=Path, default=Path.home() / 'ran-ai/data/landing/server-batches')
@@ -575,6 +743,15 @@ def main():
         parser.error('run as a normal user, without sudo')
     import fcntl
     root = Path.home() / 'ran-ai'
+    if args.action in ('install-schedule', 'schedule-status', 'remove-schedule', 'install-automation', 'automation-status'):
+        try:
+            if args.action in ('install-automation', 'automation-status'):
+                return automation(args, root)
+            return manage_schedule(args, root)
+        except Exception as error:
+            report_failure(error, args.action)
+            print('Schedule setup/status failed; check the diagnostic above. No source data deleted.')
+            return 1
     if args.action == 'init-config':
         example = dict(timeout_seconds=1800,
                        ai=dict(host='AI_HOST', user='sysadmin', directory='/home/sysadmin/ran-ai/data/landing/server-batches',

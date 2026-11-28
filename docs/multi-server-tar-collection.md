@@ -203,7 +203,7 @@ python3 "$HOME/ran-ai-transfer/18_transfer_tar_batches.py" run
 ```
 
 `plan` lists counts after checking sources; it downloads and pushes nothing.
-Version `tar-transfer-v5` prints a version banner and safe diagnostic codes on
+Version `tar-transfer-v6` prints a version banner and safe diagnostic codes on
 failure. `CONFIG_JSON` includes the exact line and column in the local config;
 `CONFIG_PERMISSIONS`, `SSH_HOST_KEY`, `SSH_AUTH`, `SSH_CONNECTION`, and
 `REMOTE_PYTHON` distinguish common setup failures without exposing credentials.
@@ -250,30 +250,82 @@ batch. If an archive fails after earlier ones commit, those completed archives
 stay visible; retries skip exact-TAR duplicates and resume the batch. Partial
 attempts within an archive remain hidden by the existing commit ledger.
 
-## 4. Schedule every 15 minutes
+## 4. Enable automatic collection and ingestion once
 
-After the manual run succeeds, add this line using `crontab -e` under the
-intermediate account. Replace `/home/INTERMEDIATE_USER` with the real absolute
-home and use the verified Python path (`command -v python3`):
+Replace script 18 on **both** servers first:
 
-```cron
-*/15 * * * * /usr/bin/python3 /home/INTERMEDIATE_USER/ran-ai-transfer/18_transfer_tar_batches.py run >> /home/INTERMEDIATE_USER/ran-ai-transfer/collection-console.log 2>&1
+- Intermediate: `$HOME/ran-ai-transfer/18_transfer_tar_batches.py`
+- AI: `/home/sysadmin/ran-ai/app/18_transfer_tar_batches.py`, beside loader 14.
+
+Keep your existing config, credentials, cache and cursors. Both hosts require an
+active `crond` and the `crontab` client. The installer checks these prerequisites;
+it does not install packages or change system services. Keep the existing
+ClickHouse instance running on the AI server.
+
+Run this one-time setup on the intermediate server, as the account owning the
+configuration and known_hosts:
+
+```bash
+python3 -u "$HOME/ran-ai-transfer/18_transfer_tar_batches.py" install-automation
 ```
 
-Use the same account that owns the private password config; password authentication
-does not need an interactive prompt. For endpoints using keys instead, ensure cron
-can access their keys/agent. A login-shell agent is not automatically available in cron.
+Setup preflights source access without downloading files, then uses configured
+AI SSH credentials to install AI ingestion. It enables local collection after
+AI setup succeeds:
 
-On the AI server, add a separate normal-user cron entry to ingest received batches:
+- Collector: every 15 minutes, at `:00`, `:15`, `:30` and `:45`, all day.
+- AI ingester: every minute, all day. It processes only complete checksum-verified
+  batches with `.ready`; newly delivered batches normally start at the next minute
+  boundary, subject to existing work and processing time.
 
-```cron
-*/15 * * * * /home/sysadmin/ran-ai/venv/bin/python /home/sysadmin/ran-ai/app/18_transfer_tar_batches.py ingest >> /home/sysadmin/ran-ai/logs/batch-ingest-console.log 2>&1
+After setup, no manual `run` or `ingest` is required per batch, and no open SSH
+terminal is needed. Cron launches short-lived jobs. The first collection occurs
+at the next 15-minute boundary. `min_age_seconds` still applies: files too young
+for a scan wait until a later scan. Other sources' files remain queued until
+every configured producer has new data.
+
+Same filenames are stored under `BATCH_ID/SOURCE_ID/SHA256.tar` on the AI server,
+with original filenames in manifests. Incomplete uploads are never ingested.
+Failed batches are retained and retried by later jobs; exact committed TARs are
+skipped safely by the existing loader.
+
+Check both schedules from the intermediate server:
+
+```bash
+python3 -u "$HOME/ran-ai-transfer/18_transfer_tar_batches.py" automation-status
 ```
 
-Ingestion can run before a push finishes; it ignores batches without `.ready`
-and picks them up on the next cycle. This can add up to 15 minutes of ingestion
-latency after delivery. These entries are instructions, not automatically
-installed schedules. Do not add duplicate entries.
+Status verifies installed jobs and active cron, not successful transfers or loads.
+For actual results, inspect:
+
+- Intermediate: `$HOME/ran-ai-transfer/spool/logs/scheduled-collector.log`
+- AI: `$HOME/ran-ai/logs/scheduled-ingest.log`
+
+Re-running setup updates its managed jobs without duplicates and preserves
+unrelated cron jobs. Previous manual jobs invoking this exact script and role are
+replaced. Private crontab backups are saved under `run/` before modifications.
+If setup fails partway through, resolve the diagnostic and rerun; AI scheduling
+may already be installed and waiting for data.
+
+The AI script path is derived from its configured inbox/project directory; set
+`ai.ingest_script` to a full path only for a custom layout. The endpoint's
+configured `python` is used to run it.
+
+For separate local setup/status/removal, run the corresponding command on its host:
+
+```bash
+python3 "$HOME/ran-ai-transfer/18_transfer_tar_batches.py" install-schedule --role collector
+python3 "$HOME/ran-ai-transfer/18_transfer_tar_batches.py" schedule-status --role collector
+python3 "$HOME/ran-ai-transfer/18_transfer_tar_batches.py" remove-schedule --role collector
+"$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/18_transfer_tar_batches.py" install-schedule --role ingest
+"$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/18_transfer_tar_batches.py" schedule-status --role ingest
+"$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/18_transfer_tar_batches.py" remove-schedule --role ingest
+```
+
+Removal retains all archives/state/data and does not stop an already running job.
+Jobs survive logout and persist across reboots; OS cron and ClickHouse must still
+be running. Password auth works unattended; key endpoints instead need their
+configured keys/agent available to cron.
 
 Nonblocking locks prevent overlapping collector runs and coordinate AI ingestion
 with loader 14's `vendor-ingest.lock`. If a run lasts more than 15 minutes, the
