@@ -44,11 +44,12 @@ no speculative measurement-level deduplication.
 - Intermediate server: Python 3.6+ and OpenSSH client. Run under a normal account.
 - Producers: Python 3.6+ available through SSH, and read access to the TAR folder.
 - AI server: existing Python venv, running ClickHouse and current loader 14.
-- The intermediate account must have noninteractive SSH access to every producer
-  and to the AI server as `sysadmin`, using keys or an SSH agent.
+- The intermediate account must have SSH access to every producer and to the AI
+  server as `sysadmin`, using each endpoint's username/password or keys.
 - Verify SSH host fingerprints using your normal trusted procedure and populate
   that account's known_hosts before automation. Strict checking remains enabled;
-  this script does not bypass verification or accept passwords from config.
+  this script does not bypass verification. Configured passwords are not used to
+  answer host-key confirmation prompts.
 - Keep producer retention long enough for collection/retries. Finish files using
   a temporary extension followed by rename to `.tar` if possible.
 
@@ -78,15 +79,16 @@ Edit `$HOME/ran-ai-transfer/config.json`. An example with two producers:
   "ai": {
     "host": "AI_HOST",
     "user": "sysadmin",
+    "password": "REPLACE_WITH_AI_PASSWORD",
     "directory": "/home/sysadmin/ran-ai/data/landing/server-batches",
-    "python": "/home/sysadmin/ran-ai/venv/bin/python",
-    "identity_file": "/home/INTERMEDIATE_USER/.ssh/ai_transfer_key"
+    "python": "/home/sysadmin/ran-ai/venv/bin/python"
   },
   "sources": [
     {
       "id": "nr-server-01",
       "host": "PRODUCER_HOST_1",
       "user": "PRODUCER_USER",
+      "password": "REPLACE_WITH_PRODUCER_PASSWORD",
       "directory": "/log/pm/oss/raw/nr",
       "patterns": ["*.tar"],
       "min_age_seconds": 120,
@@ -96,6 +98,7 @@ Edit `$HOME/ran-ai-transfer/config.json`. An example with two producers:
       "id": "nr-server-02",
       "host": "PRODUCER_HOST_2",
       "user": "PRODUCER_USER",
+      "password": "REPLACE_WITH_PRODUCER_PASSWORD",
       "directory": "/log/pm/oss/raw/nr",
       "patterns": ["*.tar"],
       "min_age_seconds": 120,
@@ -107,10 +110,45 @@ Edit `$HOME/ran-ai-transfer/config.json`. An example with two producers:
 
 Replace every placeholder. Add every producer; source IDs must be unique and
 contain only letters, digits, `_` or `-`, starting with a letter/digit.
-`port` is optional (default 22), `identity_file` is optional (uses normal SSH
-configuration/agent otherwise), and `python` is an executable path/name (default
-`python3`). The identity field is a key **path**, never the key contents. The
-same optional SSH fields are supported for each producer.
+Each producer has its own `user` and `password`, even when the values are the same
+on all hosts. `ai` has independent authentication and can also use a password.
+`user` is the SSH username; there is no global credential inheritance. If your
+config exists, edit it directly; `init-config` refuses to overwrite it.
+
+`port` is optional (default 22); `python` is an executable path/name (default
+`python3`). For key authentication, omit `password` and optionally set
+`identity_file`, or use the normal SSH config/agent. Do not configure both
+`password` and `identity_file` on one endpoint. The identity field is a key path,
+never key contents. These options apply to producers and `ai`.
+
+### Password authentication
+
+After editing the config on the intermediate server:
+
+```bash
+chmod 600 "$HOME/ran-ai-transfer/config.json"
+```
+
+The file must be owned by the collector account. The script refuses password
+configs accessible to group/others. Passwords are plaintext in this private file;
+keep it on the intermediate server, out of GitHub and shared output. Apply JSON
+escaping to a double quote or backslash in a password. Spaces, shell metacharacters
+and non-ASCII text are supported; empty passwords, NULs and line breaks are not.
+
+The collector uses OpenSSH askpass; no sshpass/Paramiko installation is required.
+Only the current endpoint's password is placed in the SSH child's environment.
+It is not placed in command arguments, remote requests, manifests, provenance or
+helper-file contents. The owner-only launcher is removed after each SSH call.
+The parent environment is not modified. This does not encrypt the local config
+or prevent local root/equivalent-account access to process credentials.
+
+A detached SSH session lets askpass work both interactively and from cron,
+without an X server. The helper answers password prompts only, not host-key,
+key-passphrase, MFA/OTP or other prompts. Password changes/expired credentials
+are not supported. Remote SSH must permit password authentication. Strict host-key
+checking stays enabled. Wrong credentials fail the collection and retain the queue.
+
+Reference: [OpenSSH askpass environment](https://man.openbsd.org/ssh.1#SSH_ASKPASS).
 
 Patterns match filenames case-sensitively in the named directory, not recursively.
 Add `*.tar.gz`, `*.tgz`, `*.tar.bz2` or `*.tar.xz` as needed. Young files wait for
@@ -191,8 +229,9 @@ home and use the verified Python path (`command -v python3`):
 */15 * * * * /usr/bin/python3 /home/INTERMEDIATE_USER/ran-ai-transfer/18_transfer_tar_batches.py run >> /home/INTERMEDIATE_USER/ran-ai-transfer/collection-console.log 2>&1
 ```
 
-Ensure the scheduled account can access its keys without an interactive prompt;
-an agent available only in an SSH login shell will not automatically exist in cron.
+Use the same account that owns the private password config; password authentication
+does not need an interactive prompt. For endpoints using keys instead, ensure cron
+can access their keys/agent. A login-shell agent is not automatically available in cron.
 
 On the AI server, add a separate normal-user cron entry to ingest received batches:
 

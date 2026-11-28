@@ -12,10 +12,13 @@ Arguments: action {init-config,plan,run,ingest}; --config PATH (default
 $HOME/ran-ai-transfer/config.json); --spool PATH (default $HOME/ran-ai-transfer/spool);
 --inbox PATH (AI ingest only, default $HOME/ran-ai/data/landing/server-batches).
 Run as a normal user, without sudo. Configure cron separately for 15-minute runs.
-No passwords are stored. SSH keys and preverified known_hosts are required.
+Each endpoint accepts user/password or an optional identity_file. Passwords stay
+in the private local config (chmod 600), never in manifests or command arguments.
+Preverified known_hosts are required for both authentication methods.
 Original source archives are never deleted. No model or new Python package needed.
 """
 import argparse
+import contextlib
 import csv
 from datetime import datetime, timezone
 import hashlib
@@ -26,6 +29,7 @@ from pathlib import Path
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -175,14 +179,24 @@ def endpoint(value):
         raise ValueError('directory_must_be_absolute')
     if type(value.get('port', 22)) is not int or not 1 <= value.get('port', 22) <= 65535:
         raise ValueError('invalid_ssh_port')
-    if 'password' in value or 'private_key' in value:
-        raise ValueError('use_ssh_key_files_not_embedded_secrets')
+    if 'private_key' in value:
+        raise ValueError('use_identity_file_not_embedded_private_keys')
+    if 'password' in value:
+        password = value['password']
+        if not isinstance(password, str) or not password or any(char in password for char in '\r\n\0'):
+            raise ValueError('password_must_be_nonempty_single_line_text')
+        if value.get('identity_file'):
+            raise ValueError('choose_password_or_identity_file_for_each_endpoint')
     if not re.fullmatch(r'[A-Za-z0-9_/][A-Za-z0-9_./-]*', value.get('python', 'python3')):
         raise ValueError('invalid_remote_python_executable')
 
 
 def load_config(path):
     config = json.loads(path.read_text(encoding='utf-8'))
+    if sys.platform.startswith('linux') and any('password' in item for item in [config['ai']] + config['sources']):
+        details = path.stat()
+        if details.st_uid != os.geteuid() or stat.S_IMODE(details.st_mode) & 0o077:
+            raise ValueError('password_config_must_be_owned_by_current_user_and_chmod_600')
     endpoint(config['ai'])
     sources = config['sources']
     if not sources:
@@ -204,17 +218,56 @@ def load_config(path):
     return config
 
 
+@contextlib.contextmanager
+def ssh_auth(target, helper_root=None):
+    """Create a secret-free askpass launcher; password exists only in child env."""
+    environment = os.environ.copy()
+    for name in ('RAN_AI_SSH_PASSWORD', 'RAN_AI_ASKPASS_ACTIVE'):
+        environment.pop(name, None)
+    if 'password' not in target:
+        yield ['-o', 'BatchMode=yes'], environment, False
+        return
+    helper_root = helper_root or Path.home() / '.cache/ran-ai-transfer'
+    helper_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='askpass-', dir=str(helper_root)) as temporary:
+        helper = Path(temporary) / 'askpass'
+        helper.write_text('#!/bin/sh\nexec %s %s --_ssh-askpass "$@"\n' %
+                          (shlex.quote(sys.executable), shlex.quote(str(Path(__file__).resolve()))), encoding='utf-8')
+        helper.chmod(0o700)
+        environment.update(SSH_ASKPASS=str(helper), SSH_ASKPASS_REQUIRE='force',
+                           DISPLAY=environment.get('DISPLAY') or 'ran-ai-askpass:0',
+                           RAN_AI_SSH_PASSWORD=target['password'], RAN_AI_ASKPASS_ACTIVE='1')
+        yield ['-o', 'BatchMode=no', '-o', 'PreferredAuthentications=password,keyboard-interactive',
+               '-o', 'PubkeyAuthentication=no', '-o', 'NumberOfPasswordPrompts=1'], environment, True
+
+
+def askpass(prompt, environment):
+    if environment.get('RAN_AI_ASKPASS_ACTIVE') != '1' or 'RAN_AI_SSH_PASSWORD' not in environment:
+        return 1
+    # Never answer host-key, passphrase, OTP or other unexpected interactive prompts.
+    if not re.search(r'password', prompt, re.I):
+        return 1
+    print(environment['RAN_AI_SSH_PASSWORD'])
+    return 0
+
+
 def ssh_call(target, request, timeout, incoming=None, outgoing=None):
-    command = ['ssh', '-T', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes',
+    with ssh_auth(target) as (auth_options, environment, detached):
+        return ssh_exchange(target, request, timeout, incoming, outgoing, auth_options, environment, detached)
+
+
+def ssh_exchange(target, request, timeout, incoming, outgoing, auth_options, environment, detached):
+    command = ['ssh', '-T', '-o', 'StrictHostKeyChecking=yes',
                '-o', 'ConnectTimeout=20', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=3',
-               '-p', str(target.get('port', 22))]
+               '-p', str(target.get('port', 22))] + auth_options
     if target.get('identity_file'):
         command += ['-i', str(Path(target['identity_file']).expanduser())]
     command += [target['user'] + '@' + target['host'], shlex.quote(target.get('python', 'python3')) + ' -c ' + shlex.quote(REMOTE)]
     request = dict(request, directory=target['directory'])
     with tempfile.TemporaryFile() as errors:
         process = subprocess.Popen(command, stdin=subprocess.PIPE,
-                                   stdout=outgoing if outgoing is not None else subprocess.PIPE, stderr=errors)
+                                   stdout=outgoing if outgoing is not None else subprocess.PIPE, stderr=errors,
+                                   env=environment, start_new_session=detached)
         expired = threading.Event()
         def terminate():
             expired.set()
@@ -230,7 +283,10 @@ def ssh_call(target, request, timeout, incoming=None, outgoing=None):
             process.wait()
             if process.returncode or expired.is_set():
                 errors.seek(0)
-                raise RuntimeError('ssh_failed_or_timed_out: ' + errors.read(8192).decode(errors='replace'))
+                detail = errors.read(8192).decode(errors='replace')
+                if target.get('password'):
+                    detail = detail.replace(target['password'], '[REDACTED]')
+                raise RuntimeError('ssh_failed_or_timed_out: ' + detail)
             return result
         finally:
             timer.cancel()
@@ -444,8 +500,9 @@ def main():
     if args.action == 'init-config':
         example = dict(timeout_seconds=1800,
                        ai=dict(host='AI_HOST', user='sysadmin', directory='/home/sysadmin/ran-ai/data/landing/server-batches',
+                               password='REPLACE_WITH_AI_PASSWORD',
                                python='/home/sysadmin/ran-ai/venv/bin/python'),
-                       sources=[dict(id='source-1', host='SOURCE_HOST', user='SOURCE_USER', directory='/log/pm/oss/raw/nr',
+                       sources=[dict(id='source-1', host='SOURCE_HOST', user='SOURCE_USER', password='REPLACE_WITH_SOURCE_PASSWORD', directory='/log/pm/oss/raw/nr',
                                      patterns=['*.tar'], min_age_seconds=120)])
         args.config.parent.mkdir(parents=True, exist_ok=True)
         with args.config.open('x', encoding='utf-8') as output:
@@ -483,4 +540,6 @@ def main():
 
 
 if __name__ == '__main__':
+    if len(sys.argv) >= 2 and sys.argv[1] == '--_ssh-askpass':
+        raise SystemExit(askpass(sys.argv[2] if len(sys.argv) == 3 else '', os.environ))
     raise SystemExit(main())

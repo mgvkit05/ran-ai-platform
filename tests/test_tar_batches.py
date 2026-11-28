@@ -97,17 +97,100 @@ class TarBatchTests(unittest.TestCase):
                 self.assertEqual(bridge.collect_source(source, spool, 30), 0)
             self.assertEqual(list(spool.glob('cache/*/*.tar')), [])
 
-    def test_endpoint_rejects_shell_options_and_embedded_passwords(self):
+    def test_endpoint_rejects_shell_options_and_invalid_authentication(self):
         endpoint = dict(host='host.example', user='reader', directory='/log/pm/oss/raw/nr')
         bridge.endpoint(endpoint)
         for fields in (dict(host='-oProxyCommand=bad'), dict(user='reader;bad'),
-                       dict(password='secret'), dict(python='python3; bad')):
+                       dict(private_key='secret'), dict(python='python3; bad'), dict(password=''),
+                       dict(password='line1\nline2'), dict(password='secret', identity_file='/key')):
             with self.assertRaises(ValueError):
                 bridge.endpoint(dict(endpoint, **fields))
+
+    def test_each_producer_password_is_scoped_to_its_own_child_environment(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = dict(bridge.os.environ)
+            for secret in ('producer-one-$quote"', 'producer-two-! spaced'):
+                bridge.endpoint(dict(host='host', user='reader', directory='/logs', password=secret))
+                with bridge.ssh_auth({'password': secret}, Path(temporary)) as (options, environment, detached):
+                    helper = Path(environment['SSH_ASKPASS'])
+                    self.assertTrue(helper.exists())
+                    self.assertNotIn(secret, helper.read_text())
+                    self.assertNotIn(secret, ' '.join(options))
+                    self.assertEqual(environment['RAN_AI_SSH_PASSWORD'], secret)
+                    self.assertIn('BatchMode=no', options)
+                    self.assertTrue(detached)
+                self.assertFalse(helper.exists())
+            self.assertEqual(dict(bridge.os.environ), parent)
+
+    def test_askpass_replies_only_to_password_prompts(self):
+        environment = {'RAN_AI_ASKPASS_ACTIVE': '1', 'RAN_AI_SSH_PASSWORD': 'secret-$!'}
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(bridge.askpass("reader@host's password:", environment), 0)
+        self.assertEqual(output.getvalue(), 'secret-$!\n')
+        for prompt in ('Are you sure you want to continue connecting?', 'Verification code:', 'Enter passphrase for key:'):
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(bridge.askpass(prompt, environment), 1)
+            self.assertEqual(output.getvalue(), '')
+
+    def test_key_authentication_remains_noninteractive_without_password_env(self):
+        with patch.dict(bridge.os.environ, {'RAN_AI_SSH_PASSWORD': 'stale-secret', 'RAN_AI_ASKPASS_ACTIVE': '1'}):
+            with bridge.ssh_auth({}) as (options, environment, detached):
+                self.assertIn('BatchMode=yes', options)
+                self.assertNotIn('RAN_AI_SSH_PASSWORD', environment)
+                self.assertNotIn('RAN_AI_ASKPASS_ACTIVE', environment)
+                self.assertFalse(detached)
+
+    def test_password_config_requires_private_permissions_on_linux(self):
+        from unittest.mock import Mock
+        config = {'ai': {'host': 'ai', 'user': 'sysadmin', 'directory': '/inbox'},
+                  'sources': [{'id': 'source-1', 'host': 'one', 'user': 'reader', 'directory': '/logs', 'password': 'secret'}]}
+        path = Mock()
+        path.read_text.return_value = json.dumps(config)
+        with patch.object(bridge.sys, 'platform', 'linux'), patch.object(bridge.os, 'geteuid', return_value=1000, create=True):
+            for owner, mode in ((1000, 0o100644), (2000, 0o100600)):
+                path.stat.return_value = types.SimpleNamespace(st_uid=owner, st_mode=mode)
+                with self.assertRaises(ValueError):
+                    bridge.load_config(path)
+            path.stat.return_value = types.SimpleNamespace(st_uid=1000, st_mode=0o100600)
+            self.assertEqual(bridge.load_config(path)['sources'][0]['user'], 'reader')
+
+    def test_password_never_enters_ssh_arguments_or_remote_request(self):
+        captured = {}
+        class Input(io.BytesIO):
+            def close(self):
+                captured['request'] = self.getvalue()
+                super().close()
+        class Process:
+            def __init__(self, command, **kwargs):
+                captured.update(command=command, kwargs=kwargs,
+                                helper=Path(kwargs['env']['SSH_ASKPASS']).read_text())
+                self.stdin = Input()
+                self.stdout = io.BytesIO(b'[]')
+                self.returncode = 0
+            def poll(self):
+                return 0
+            def wait(self):
+                return 0
+        with tempfile.TemporaryDirectory() as temporary, \
+             patch.object(bridge.Path, 'home', return_value=Path(temporary)), \
+             patch.object(bridge.subprocess, 'Popen', Process):
+            result = bridge.ssh_call({'host': 'host', 'user': 'reader', 'directory': '/logs', 'password': 'SENTINEL_SECRET'},
+                                     {'operation': 'list'}, 30)
+        self.assertEqual(result, b'[]')
+        self.assertNotIn('SENTINEL_SECRET', ' '.join(captured['command']))
+        self.assertNotIn(b'SENTINEL_SECRET', captured['request'])
+        self.assertNotIn('SENTINEL_SECRET', captured['helper'])
+        self.assertTrue(captured['kwargs']['start_new_session'])
+        self.assertIn('StrictHostKeyChecking=yes', captured['command'])
 
     def test_same_filename_from_two_hosts_is_preserved_and_ingested(self):
         with tempfile.TemporaryDirectory() as temporary:
             config, spool, ai_root, inbox = setup(Path(temporary))
+            for source in config['sources']:
+                source['password'] = 'PRIVATE_PRODUCER_PASSWORD'
+            config['ai']['password'] = 'PRIVATE_AI_PASSWORD'
             make_archive(Path(config['sources'][0]['directory']) / 'same.tar', rows=1)
             make_archive(Path(config['sources'][1]['directory']) / 'same.tar', rows=2)
             with patch.object(bridge, 'ssh_call', local_remote), contextlib.redirect_stdout(io.StringIO()):
@@ -118,6 +201,9 @@ class TarBatchTests(unittest.TestCase):
             self.assertEqual(len(batch['archives']), 2)
             self.assertEqual(len(list(spool.glob('cache/*/*.tar'))), 2)
             self.assertEqual(len(list(ready[0].parent.glob('*/*.tar'))), 2)
+            for path in list(spool.rglob('*.json')) + list(inbox.rglob('*.json')):
+                self.assertNotIn('PRIVATE_PRODUCER_PASSWORD', path.read_text())
+                self.assertNotIn('PRIVATE_AI_PASSWORD', path.read_text())
             self.assertNotEqual(batch['archives'][0]['sha256'], batch['archives'][1]['sha256'])
             db = ProvenanceDatabase()
             with contextlib.redirect_stdout(io.StringIO()):
