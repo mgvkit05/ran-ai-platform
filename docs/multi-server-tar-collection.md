@@ -334,6 +334,53 @@ not a guaranteed end-to-end delivery deadline.
 
 ## Provenance, retained files and operations
 
+### Watch collection, delivery and ingestion
+
+On the **intermediate server**, follow the scheduled collection/push log:
+
+```bash
+tail -F "$HOME/ran-ai-transfer/spool/logs/scheduled-collector.log"
+```
+
+Interpret the messages as follows:
+
+- `Source ...: 1 completed archive(s) verified.`: the selected TAR is available
+  in the intermediate cache (downloaded or verified from retained cache).
+- `Source ...: 0 completed archive(s) verified.`: no newer eligible TAR this scan.
+- `WAITING`: the batch is held for missing/new source data or collection recovery.
+- `Pushing batch archive ...`: upload started; this alone is not delivery confirmation.
+- `SUCCESS: complete batch pushed`: the AI receiver acknowledged and verified all
+  batch files and published the complete-batch marker.
+
+Show recent TAR arrival and successful push times on the intermediate server:
+
+```bash
+ls -lt "$HOME"/ran-ai-transfer/spool/cache/*/*.tar | head
+ls -lt "$HOME"/ran-ai-transfer/spool/sent/*.json | head
+```
+
+The first lists cached TARs by local file modification time. The second lists
+manifests written after confirmed delivery, so their modification times indicate
+successful push completion. A sent manifest confirms delivery, not database
+ingestion. The folders/files appear after their first successful activity.
+
+On the **AI server**, follow automatic ClickHouse ingestion:
+
+```bash
+tail -F "$HOME/ran-ai/logs/scheduled-ingest.log"
+```
+
+`Ingesting batch archive ...` indicates processing. `Batch ingestion summary`
+with a positive `batches` count and `"failures": 0` indicates completed ingestion
+during that invocation. `already_loaded` counts exact-TAR duplicates safely
+skipped; `rows` counts newly loaded source rows. A zero-batch summary can simply
+mean no completed batch is pending. Review failure diagnostics/private logs if
+the failure count is positive.
+
+`tail -F` waits/retries if the log has not been created yet. Press **Ctrl+C** to
+stop watching; the scheduled jobs continue. With a custom `--spool`, substitute
+that directory for the intermediate spool paths above.
+
 `ran_ai.archive_sources_v1` records each source origin. The view
 `ran_ai.archive_sources` exposes origins whose archive hash is committed. Join on
 `archive_sha256` to relate origins to counter files/rows; keep these host/path

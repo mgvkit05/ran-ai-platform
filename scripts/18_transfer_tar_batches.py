@@ -10,6 +10,17 @@ Intermediate server (Python 3.6+ and OpenSSH client):
 AI server (keep 14_ingest_vendor_tar.py beside this script):
   "$HOME/ran-ai/venv/bin/python" "$HOME/ran-ai/app/18_transfer_tar_batches.py" ingest
 
+Watch collection/push on the intermediate server:
+  tail -F "$HOME/ran-ai-transfer/spool/logs/scheduled-collector.log"
+Watch ClickHouse ingestion on the AI server:
+  tail -F "$HOME/ran-ai/logs/scheduled-ingest.log"
+Recent downloaded TARs and successful push manifests (intermediate server):
+  ls -lt "$HOME"/ran-ai-transfer/spool/cache/*/*.tar | head
+  ls -lt "$HOME"/ran-ai-transfer/spool/sent/*.json | head
+Logs/cache/manifests appear after their first scheduled activity. Ctrl+C stops
+tail only; scheduled collection and ingestion continue. For --spool overrides,
+use that spool directory instead of the default intermediate paths above.
+
 Arguments: action {init-config,plan,run,ingest,install-automation,automation-status,
 install-schedule,schedule-status,remove-schedule}; --config PATH (default
 $HOME/ran-ai-transfer/config.json); --spool PATH (default $HOME/ran-ai-transfer/spool);
