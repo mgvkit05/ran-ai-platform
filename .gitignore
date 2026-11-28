@@ -25,4 +25,6 @@ ran-ai-offline-bundle/
 run/
 ran-ai-clickhouse-bundle/
 config/clickhouse-server/
+config/config.json
+config/tar-transfer.json
 reports/

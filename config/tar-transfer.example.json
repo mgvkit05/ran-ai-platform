@@ -1,0 +1,37 @@
+{
+  "timeout_seconds": 1800,
+  "ai": {
+    "host": "AI_SERVER_ADDRESS",
+    "user": "sysadmin",
+    "password": "REPLACE_WITH_AI_PASSWORD",
+    "port": 22,
+    "directory": "/home/sysadmin/ran-ai/data/landing/server-batches",
+    "python": "/home/sysadmin/ran-ai/venv/bin/python"
+  },
+  "sources": [
+    {
+      "id": "delta_psm0",
+      "host": "FIRST_PRODUCER_ADDRESS",
+      "user": "REPLACE_WITH_PRODUCER_USERNAME",
+      "password": "REPLACE_WITH_PRODUCER_PASSWORD",
+      "port": 22,
+      "directory": "/log/pm/oss/raw/nr",
+      "patterns": ["*.tar"],
+      "min_age_seconds": 120,
+      "max_archive_bytes": 10737418240,
+      "python": "python3"
+    },
+    {
+      "id": "delta_psm1",
+      "host": "SECOND_PRODUCER_ADDRESS",
+      "user": "REPLACE_WITH_PRODUCER_USERNAME",
+      "password": "REPLACE_WITH_PRODUCER_PASSWORD",
+      "port": 22,
+      "directory": "/log/pm/oss/raw/nr",
+      "patterns": ["*.tar"],
+      "min_age_seconds": 120,
+      "max_archive_bytes": 10737418240,
+      "python": "python3"
+    }
+  ]
+}

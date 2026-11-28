@@ -67,6 +67,11 @@ $HOME/ran-ai-transfer/18_transfer_tar_batches.py
 
 Create a private template (refuses to overwrite an existing config):
 
+Alternatively, download [tar-transfer.example.json](../config/tar-transfer.example.json),
+save it as `$HOME/ran-ai-transfer/config.json` on the intermediate server, and
+replace the placeholder values there. The example includes two producers. Keep
+real passwords in the intermediate server's private copy, not the GitHub sample.
+
 ```bash
 python3 "$HOME/ran-ai-transfer/18_transfer_tar_batches.py" init-config
 ```
