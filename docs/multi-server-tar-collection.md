@@ -187,12 +187,17 @@ python3 "$HOME/ran-ai-transfer/18_transfer_tar_batches.py" run
 ```
 
 `plan` lists counts after checking sources; it downloads and pushes nothing.
-Version `tar-transfer-v3` prints a version banner and safe diagnostic codes on
+Version `tar-transfer-v4` prints a version banner and safe diagnostic codes on
 failure. `CONFIG_JSON` includes the exact line and column in the local config;
 `CONFIG_PERMISSIONS`, `SSH_HOST_KEY`, `SSH_AUTH`, `SSH_CONNECTION`, and
 `REMOTE_PYTHON` distinguish common setup failures without exposing credentials.
 Inspect malformed JSON locally; do not share password-bearing config contents.
-It reads/hashes eligible remote archives and may take time on a large backfill.
+It lists filenames/metadata without reading or hashing archive contents.
+SHA256 checks are performed by `run` before collecting/pushing content.
+SSH operations print elapsed-time status every 15 seconds while waiting, so a
+slow connection/directory listing is visible. A heartbeat indicates waiting,
+not proof that authentication or transfer has completed. The configured timeout
+still applies (default 1800 seconds per SSH operation).
 `run` downloads new content to private `.part` files, verifies size/SHA256, then
 publishes local cache files. Existing cached content is verified and reused.
 

@@ -34,6 +34,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import traceback
 import uuid
 
@@ -41,7 +42,7 @@ SUFFIXES = ('.tar', '.tgz', '.tar.gz', '.tar.bz2', '.tar.xz')
 ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}')
 HASH = re.compile(r'[a-f0-9]{64}')
 PROVENANCE = 'ran_ai.archive_sources_v1'
-VERSION = 'tar-transfer-v3'
+VERSION = 'tar-transfer-v4'
 
 
 def report_failure(error, stage):
@@ -49,7 +50,10 @@ def report_failure(error, stage):
     detail = str(error).lower()
     code, hint = 'UNCLASSIFIED', 'Review the private log for the underlying error.'
     if isinstance(error, json.JSONDecodeError):
-        code, hint = 'CONFIG_JSON', 'Invalid JSON at line %d, column %d. Check commas, braces and quoting.' % (error.lineno, error.colno)
+        if stage == 'read-config':
+            code, hint = 'CONFIG_JSON', 'Invalid JSON at line %d, column %d. Check commas, braces and quoting.' % (error.lineno, error.colno)
+        else:
+            code, hint = 'REMOTE_OUTPUT', 'Remote command returned non-JSON output. Check remote Python and shell startup/banner output in the private log.'
     elif 'password_config_must_be_owned' in detail:
         code, hint = 'CONFIG_PERMISSIONS', 'Run chmod 600 on config.json and use the account that owns it.'
     elif 'host key verification failed' in detail or 'remote host identification has changed' in detail:
@@ -92,9 +96,9 @@ def snapshot(p):
     if not stat.S_ISREG(s.st_mode): raise ValueError('not_regular_file')
     return [s.st_size,s.st_mtime_ns,s.st_ino]
 mode=q['operation']
-if mode in ('list','fetch'):
+if mode in ('list','plan','fetch'):
     root=pathlib.Path(q['directory']).resolve(strict=True)
-    if mode=='list':
+    if mode in ('list','plan'):
         result=[]
         for p in sorted(root.iterdir()):
             if p.is_symlink() or not p.is_file(): continue
@@ -103,7 +107,7 @@ if mode in ('list','fetch'):
             before=snapshot(p)
             if int(time.time()*1000000000)-before[1]<q['min_age_seconds']*1000000000: continue
             if before[0]>q['max_archive_bytes']: raise ValueError('archive_size_limit')
-            digest=checksum(p)
+            digest=checksum(p) if mode=='list' else None
             if snapshot(p)!=before: raise ValueError('source_changed_during_scan')
             result.append(dict(name=p.name,sha256=digest,size=before[0],mtime_ns=before[1],inode=before[2]))
         print(json.dumps(result))
@@ -307,6 +311,16 @@ def ssh_exchange(target, request, timeout, incoming, outgoing, auth_options, env
             process.kill()
         timer = threading.Timer(timeout, terminate)
         timer.start()
+        stopped = threading.Event()
+        started = time.monotonic()
+        labels = {'plan': 'remote directory listing', 'list': 'remote inventory/checksums',
+                  'fetch': 'archive download', 'put': 'archive upload', 'publish': 'batch verification/publication'}
+        label = labels.get(request.get('operation'), 'SSH operation')
+        def heartbeat():
+            while not stopped.wait(15):
+                print('[%ds elapsed: waiting for %s; timeout=%ds]' %
+                      (int(time.monotonic() - started), label, timeout), flush=True)
+        threading.Thread(target=heartbeat, daemon=True).start()
         try:
             process.stdin.write(json.dumps(request).encode() + b'\n')
             if incoming is not None:
@@ -322,6 +336,7 @@ def ssh_exchange(target, request, timeout, incoming, outgoing, auth_options, env
                 raise RuntimeError('ssh_failed_or_timed_out: ' + detail)
             return result
         finally:
+            stopped.set()
             timer.cancel()
             if process.poll() is None:
                 process.kill()
@@ -566,7 +581,8 @@ def main():
                     for source in config['sources']:
                         stage = 'plan-' + source['id']
                         print('Checking source %s...' % source['id'], flush=True)
-                        items = json.loads(ssh_call(source, dict(operation='list', patterns=source.get('patterns', ['*.tar']),
+                        print('Listing filenames/metadata only; archive checksums are deferred to run.', flush=True)
+                        items = json.loads(ssh_call(source, dict(operation='plan', patterns=source.get('patterns', ['*.tar']),
                             min_age_seconds=source.get('min_age_seconds', 120), max_archive_bytes=source.get('max_archive_bytes', 10737418240)),
                             config.get('timeout_seconds', 1800)))
                         print('Source %s: %d completed archive(s) available; nothing downloaded or pushed.' % (source['id'], len(items)))

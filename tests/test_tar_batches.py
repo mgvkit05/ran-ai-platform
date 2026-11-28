@@ -66,6 +66,24 @@ def loader_for(db):
 
 
 class TarBatchTests(unittest.TestCase):
+    def test_plan_only_lists_metadata_and_never_hashes_archive_contents(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary)
+            (path / 'sample.tar').write_bytes(b'fixture')
+            request = dict(operation='plan', directory=str(path), patterns=['*.tar'],
+                           min_age_seconds=0, max_archive_bytes=1000)
+            # Fail if the real remote program attempts to call its checksum reader.
+            program = bridge.REMOTE.replace('def checksum(p):',
+                                            "def checksum(p):\n    raise AssertionError('plan must not read archive contents')")
+            result = subprocess.run([sys.executable, '-c', program], input=json.dumps(request).encode() + b'\n',
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr.decode(errors='replace'))
+            files = json.loads(result.stdout)
+            self.assertEqual(len(files), 1)
+            self.assertEqual(files[0]['name'], 'sample.tar')
+            self.assertEqual(files[0]['size'], 7)
+            self.assertIsNone(files[0]['sha256'])
+
     def test_failure_diagnostics_report_json_location_without_config_values(self):
         output = io.StringIO()
         try:
@@ -87,6 +105,17 @@ class TarBatchTests(unittest.TestCase):
                 bridge.report_failure(RuntimeError(message), 'plan-source-1')
             self.assertIn('code=' + code, output.getvalue())
             self.assertNotIn('PRIVATE_DETAIL', output.getvalue())
+
+    def test_remote_non_json_output_is_not_reported_as_a_config_error(self):
+        output = io.StringIO()
+        try:
+            json.loads('PRIVATE_REMOTE_BANNER')
+        except json.JSONDecodeError as error:
+            with contextlib.redirect_stdout(output):
+                bridge.report_failure(error, 'plan-source-1')
+        self.assertIn('REMOTE_OUTPUT', output.getvalue())
+        self.assertNotIn('CONFIG_JSON', output.getvalue())
+        self.assertNotIn('PRIVATE_REMOTE_BANNER', output.getvalue())
 
     def test_intermediate_and_remote_program_syntax_supports_python36(self):
         ast.parse(Path(bridge.__file__).read_text(), feature_version=(3, 6))
