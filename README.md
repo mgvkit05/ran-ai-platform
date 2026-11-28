@@ -1,5 +1,13 @@
 # RAN AI Platform
 
+## Multi-server TAR collection through an intermediate server
+
+`scripts/18_transfer_tar_batches.py` collects on the RHEL intermediate server,
+waits for new archives from every configured producer, and pushes verified batches
+to the AI server for the existing ClickHouse loader. Source-specific hash paths
+prevent collisions when every server uses the same TAR filename.
+See [configuration, one-time verification and 15-minute cron setup](docs/multi-server-tar-collection.md).
+
 ## Full-data statistics and filters
 
 Update `$HOME/ran-ai/app/16_counter_tools.py`, verify the server SQL, and calculate
