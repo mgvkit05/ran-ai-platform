@@ -66,6 +66,28 @@ def loader_for(db):
 
 
 class TarBatchTests(unittest.TestCase):
+    def test_failure_diagnostics_report_json_location_without_config_values(self):
+        output = io.StringIO()
+        try:
+            json.loads('{"password":"PRIVATE_SECRET", "sources":[,]}')
+        except json.JSONDecodeError as error:
+            with contextlib.redirect_stdout(output):
+                bridge.report_failure(error, 'read-config')
+        self.assertIn('code=CONFIG_JSON', output.getvalue())
+        self.assertIn('line 1, column', output.getvalue())
+        self.assertNotIn('PRIVATE_SECRET', output.getvalue())
+
+    def test_failure_diagnostics_classify_ssh_failures_without_echoing_details(self):
+        for message, code in [('Host key verification failed. PRIVATE_DETAIL', 'SSH_HOST_KEY'),
+                              ('Permission denied (publickey,password). PRIVATE_DETAIL', 'SSH_AUTH'),
+                              ('No route to host PRIVATE_DETAIL', 'SSH_CONNECTION'),
+                              ('python3: command not found PRIVATE_DETAIL', 'REMOTE_PYTHON')]:
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                bridge.report_failure(RuntimeError(message), 'plan-source-1')
+            self.assertIn('code=' + code, output.getvalue())
+            self.assertNotIn('PRIVATE_DETAIL', output.getvalue())
+
     def test_intermediate_and_remote_program_syntax_supports_python36(self):
         ast.parse(Path(bridge.__file__).read_text(), feature_version=(3, 6))
         ast.parse(bridge.REMOTE, feature_version=(3, 6))

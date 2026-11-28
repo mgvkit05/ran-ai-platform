@@ -41,6 +41,39 @@ SUFFIXES = ('.tar', '.tgz', '.tar.gz', '.tar.bz2', '.tar.xz')
 ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}')
 HASH = re.compile(r'[a-f0-9]{64}')
 PROVENANCE = 'ran_ai.archive_sources_v1'
+VERSION = 'tar-transfer-v3'
+
+
+def report_failure(error, stage):
+    """Print only fixed descriptions and code locations, never exception payloads."""
+    detail = str(error).lower()
+    code, hint = 'UNCLASSIFIED', 'Review the private log for the underlying error.'
+    if isinstance(error, json.JSONDecodeError):
+        code, hint = 'CONFIG_JSON', 'Invalid JSON at line %d, column %d. Check commas, braces and quoting.' % (error.lineno, error.colno)
+    elif 'password_config_must_be_owned' in detail:
+        code, hint = 'CONFIG_PERMISSIONS', 'Run chmod 600 on config.json and use the account that owns it.'
+    elif 'host key verification failed' in detail or 'remote host identification has changed' in detail:
+        code, hint = 'SSH_HOST_KEY', 'Verify this host fingerprint and populate known_hosts for the collector account.'
+    elif 'permission denied' in detail and ('publickey' in detail or 'password' in detail):
+        code, hint = 'SSH_AUTH', 'Verify the endpoint user/password and that SSH permits password authentication.'
+    elif 'could not resolve hostname' in detail:
+        code, hint = 'SSH_HOSTNAME', 'Check the configured hostname/address and name resolution.'
+    elif any(text in detail for text in ('connection refused', 'no route to host', 'network is unreachable', 'connection timed out')):
+        code, hint = 'SSH_CONNECTION', 'Check network reachability and the configured SSH port from the intermediate server.'
+    elif 'command not found' in detail or 'python3: not found' in detail:
+        code, hint = 'REMOTE_PYTHON', 'Set the endpoint python field to its installed Python 3 executable.'
+    elif 'filenotfounderror' in detail and 'traceback' in detail:
+        code, hint = 'REMOTE_PATH', 'Check that the producer directory exists and the endpoint python path is valid.'
+    elif 'permissionerror' in detail and 'traceback' in detail:
+        code, hint = 'REMOTE_PERMISSIONS', 'Check producer directory/file read permissions for the configured user.'
+    elif isinstance(error, FileNotFoundError):
+        code, hint = 'LOCAL_FILE_MISSING', 'Check config/script paths and that the ssh client is installed.'
+    elif isinstance(error, ValueError) and re.fullmatch('[a-z_]+', str(error)):
+        code, hint = 'CONFIG_OR_VALIDATION', str(error)
+    print('Diagnostic: %s; stage=%s; code=%s; error=%s' % (VERSION, stage, code, type(error).__name__), flush=True)
+    print(hint, flush=True)
+    for frame in traceback.extract_tb(error.__traceback__)[-4:]:
+        print('  at %s:%d in %s' % (Path(frame.filename).name, frame.lineno, frame.name), flush=True)
 
 # Sent as fixed Python code over SSH. Requests are JSON on stdin, never shell code.
 REMOTE = r'''
@@ -395,11 +428,12 @@ def transfer(config, spool, log):
             print('Collecting source %s...' % source['id'], flush=True)
             count = collect_source(source, spool, config.get('timeout_seconds', 1800))
             print('Source %s: %d completed archive(s) verified.' % (source['id'], count), flush=True)
-        except Exception:
+        except Exception as error:
             failed = True
             traceback.print_exc(file=log)
             log.flush()
             print('Source %s unavailable or incomplete; retained files remain queued.' % source['id'], flush=True)
+            report_failure(error, 'collect-' + source['id'])
     state_path = spool / 'delivered.json'
     delivered = set(json.loads(state_path.read_text()) if state_path.exists() else [])
     active = spool / 'active-batch.json'
@@ -485,11 +519,13 @@ def ingest_batches(inbox, root, log, loader=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--version', action='version', version=VERSION)
     parser.add_argument('action', choices=('init-config', 'plan', 'run', 'ingest'))
     parser.add_argument('--config', type=Path, default=Path.home() / 'ran-ai-transfer/config.json')
     parser.add_argument('--spool', type=Path, default=Path.home() / 'ran-ai-transfer/spool')
     parser.add_argument('--inbox', type=Path, default=Path.home() / 'ran-ai/data/landing/server-batches')
     args = parser.parse_args()
+    print('=== %s; action=%s ===' % (VERSION, args.action), flush=True)
     os.umask(0o077)
     if not sys.platform.startswith('linux'):
         parser.error('run on the intermediate Linux server or AI Linux server')
@@ -520,6 +556,7 @@ def main():
             print('Another collection/ingestion is running; this scheduled invocation skipped.')
             return 0
         with (base / 'logs' / ('18-transfer-' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-%d.log' % os.getpid())).open('x') as log:
+            stage = 'read-config'
             try:
                 if args.action == 'ingest':
                     csv.field_size_limit(1024 * 1024)
@@ -527,14 +564,17 @@ def main():
                 config = load_config(args.config)
                 if args.action == 'plan':
                     for source in config['sources']:
+                        stage = 'plan-' + source['id']
+                        print('Checking source %s...' % source['id'], flush=True)
                         items = json.loads(ssh_call(source, dict(operation='list', patterns=source.get('patterns', ['*.tar']),
                             min_age_seconds=source.get('min_age_seconds', 120), max_archive_bytes=source.get('max_archive_bytes', 10737418240)),
                             config.get('timeout_seconds', 1800)))
                         print('Source %s: %d completed archive(s) available; nothing downloaded or pushed.' % (source['id'], len(items)))
                     return 0
                 return transfer(config, args.spool, log)
-            except Exception:
+            except Exception as error:
                 traceback.print_exc(file=log)
+                report_failure(error, stage)
                 print('FAILED: retained files are available for retry. Review the private log under %s.' % (base / 'logs'))
                 return 1
 
